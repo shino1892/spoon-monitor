@@ -1,0 +1,26 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@sopia-bot/core':
+        specifier: link:..\spoon\packages\core
+        version: link:../spoon/packages/core
+      dotenv:
+        specifier: ^17.2.4
+        version: 17.2.4
+
+packages:
+
+  dotenv@17.2.4:
+    resolution: {integrity: sha512-mudtfb4zRB4bVvdj0xRo+e6duH1csJRM8IukBqfTRvHotn9+LBXB8ynAidP9zHqoRC/fsllXgk4kCKlR21fIhw==}
+    engines: {node: '>=12'}
+
+snapshots:
+
+  dotenv@17.2.4: {}
