@@ -63,31 +63,47 @@ async function finishStream(summary: any) {
     console.log("🗄️ データを PostgreSQL に保存中...");
     await db.connect();
 
-    // 2. DBへ INSERT
-    const query = `
+    // 1. 配信サマリーを保存し、その ID を取得
+    const reportQuery = `
       INSERT INTO live_reports (live_id, title, dj_name, duration, likes, created_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
       RETURNING id;
     `;
-    const values = [summary.id, summary.title, summary.dj_name, summary.duration, summary.likes];
-    const res = await db.query(query, values);
-    const reportId = res.rows[0].id;
+    const reportValues = [summary.id, summary.title, summary.dj_name, summary.duration, summary.likes];
+    const reportRes = await db.query(reportQuery, reportValues);
+    const reportId = reportRes.rows[0].id; // 👈 この ID をリスナーデータに使用
 
-    // 3. Discord へレポート送信（Bot API経由）
+    // 2. リスナーデータを一括（またはループ）で保存
+    console.log(`👥 リスナー ${summary.userStats.size} 名の活動記録を保存中...`);
+
+    for (const [userId, stats] of summary.userStats) {
+      const listenerQuery = `
+        INSERT INTO listener_activities (
+          report_id, user_id, nickname, stay_seconds, entry_count, 
+          chat_count, heart_count, spoon_count, first_seen, last_seen
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+      `;
+      const listenerValues = [reportId, userId, stats.nickname, Math.floor(stats.staySeconds), stats.entryCount, stats.counts.chat, stats.counts.heart, stats.counts.spoon, stats.firstSeen, stats.lastSeen];
+      await db.query(listenerQuery, listenerValues);
+    }
+
+    // 3. Discord へレポート送信
     await sendBotMessage(`
 📊 **配信終了レポート (管理番号: ${reportId})**
 ━━━━━━━━━━━━━━
 🎤 **タイトル**: ${summary.title}
 🕒 **配信時間**: ${summary.duration} 分
-❤️ **いいね**: ${summary.likes}
+❤️ **合計いいね**: ${summary.likes}
+👥 **総リスナー数**: ${summary.userStats.size} 名
 ━━━━━━━━━━━━━━
-✅ データベースに保存されました。
+✅ 全リスナーの活動データも保存されました。
     `);
   } catch (err) {
     console.error("❌ 終了処理エラー:", err.message);
   } finally {
     await db.end();
-    process.exit(0); // すべて完了してから死ぬ
+    process.exit(0);
   }
 }
 
@@ -199,6 +215,7 @@ async function startCollector() {
       dj_name: "shino",
       duration: durationMinutes,
       likes: totalLikes,
+      userStats: userStats,
     };
 
     try {
