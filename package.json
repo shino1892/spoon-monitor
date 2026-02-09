@@ -12,6 +12,7 @@
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@sopia-bot/core": "link:..\\spoon\\packages\\core",
+    "discord.js": "^14.25.1",
     "dotenv": "^17.2.4"
   }
 }
