@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Client, GatewayIntentBits } from "discord.js";
 import { exec } from "child_process";
 import fs from "fs";

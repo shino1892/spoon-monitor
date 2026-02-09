@@ -58,7 +58,11 @@ async function monitor() {
       // 460エラー検知時の処理（monitor.ts 内）
       if (response.status === 460) {
         await sendBotMessage(` 🚨 **トークン失効を検知しました**\n監視が止まっています。\n\`!update monitor <token>\` または \`!update dj <token>\` で更新してください。`);
-        process.exit(1); // PM2 が自動でリトライしますが、トークンが古い間は止めておく
+
+        // process.exit(1) で PM2 に任せるのではなく、
+        // エラー時は「大幅な待機」を入れるか、manager に自分を止めさせる
+        console.log("通知を送信しました。1時間待機に入ります...");
+        await new Promise((resolve) => setTimeout(resolve, 3600000));
       }
 
       if (response.ok) {
