@@ -39,7 +39,7 @@ client.on("messageCreate", async (message) => {
         if (err) message.reply(`❌ プロセス再起動失敗: ${err.message}`);
         else message.reply("🚀 監視を正常に再開しました。");
       });
-    } catch (error) {
+    } catch (error:any) {
       await message.reply(`❌ ファイル更新エラー: ${error.message}`);
     }
   }

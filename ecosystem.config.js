@@ -20,5 +20,15 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "spoon-admin",
+      script: "admin-api.ts",
+      interpreter: "node",
+      interpreter_args: "--import tsx", // tsx を直接インポートして実行
+      cwd: "/root/workspaces/spoon-monitor/spoon-monitor",
+      env: {
+        PORT: 3000
+      }
+    }
   ],
 };

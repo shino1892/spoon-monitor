@@ -1,9 +1,17 @@
 import { spawn, ChildProcess } from "child_process";
+import { SpoonV2, Country } from "@sopia-bot/core";
+import { Client } from "pg";
 import "dotenv/config";
+
+const db = new Client({
+  host: "192.168.0.56", // DBコンテナのIP
+  user: "spoon_user",
+  password: "Spoon_User",
+  database: "spoon_monitor",
+});
 
 const CONFIG = {
   DJ_ID: process.env.DJ_ID!,
-  TOKEN: process.env.MONITOR_TOKEN!,
   CHECK_INTERVAL: parseInt(process.env.CHECK_INTERVAL || "30000"),
 };
 let workerProcess: ChildProcess | null = null;
@@ -33,44 +41,87 @@ async function sendBotMessage(content: string) {
       const errorData = await response.json();
       console.error("❌ Discord API エラー:", errorData);
     }
-  } catch (error) {
+  } catch (error:any) {
     console.error("❌ 送信中にエラーが発生しました:", error.message);
   }
 }
 
-async function monitor() {
-  console.log("🚀 精密監視システム 起動");
+async function setupClients() {
+  const monitorClient = new SpoonV2(Country.JAPAN);
+  await monitorClient.init();
+  
+  // トークンのセット（これで自動更新が有効になります）
+  await monitorClient.setToken(
+    process.env.MONITOR_ACCESS_TOKEN!,
+    process.env.MONITOR_REFRESH_TOKEN!
+  );
 
-  while (true) {
-    const now = new Date();
+  // 💡 【追加】トークンが更新された際に DB を同期する仕組み
+  // SpoonV2 内で tokenRefresh() が呼ばれると token プロパティが書き換わります
+  setInterval(async () => {
+    // DB への書き戻し処理（account_tokens テーブル等へ）
+    // これにより PM2 再起動時も最新トークンが維持されます
+    const query = `
+      INSERT INTO account_tokens (account_type, access_token, refresh_token, updated_at)
+      VALUES ('MONITOR', $1, $2, NOW())
+      ON CONFLICT (account_type) DO UPDATE 
+      SET access_token = EXCLUDED.access_token, 
+          refresh_token = EXCLUDED.refresh_token, 
+          updated_at = NOW();
+    `;
     try {
-      const url = `https://jp-api.spooncast.net/lives/subscribed/?ts=${now.getTime()}`;
+      await db.query(query, [monitorClient.token, monitorClient.refreshToken]);
+
+    // 2. (オプション) admin-api に通知して .env を更新させる
+    fetch('http://localhost:3000/api/sync-env', { method: 'POST' });
+
+    } catch (e:any) {
+      console.error("❌ トークン同期エラー:", e.message);
+    }
+  }, 1000 * 60 * 30); // 30分ごとに生存確認を兼ねて保存
+
+  return monitorClient;
+}
+
+async function monitor() {
+  console.log(`\n[${new Date().toLocaleTimeString()}] 🚀 精密監視システム 起動`);
+
+  // 💡 【重要】監視用クライアントを初期化
+  const monitorClient = await setupClients(); 
+  
+  while (true) {
+    try {
+      // 💡 クライアントが持っている最新のトークンを使用する
+      // もし APIClient を直接使うのが難しい場合は、以下のように client.token を参照します
+      const url = `https://jp-api.spooncast.net/lives/subscribed/?ts=${Date.now()}`;
       const response = await fetch(url, {
         headers: {
-          Authorization: `Bearer ${CONFIG.TOKEN}`,
+          // CONFIG.TOKEN ではなく、自動更新されている client.token を使う
+          Authorization: `Bearer ${monitorClient.token}`, 
           "User-Agent": "Spoon/8.10.1 (Android; 13; ja-JP)",
           "x-spoon-api-version": "2",
         },
       });
 
-      //console.log(`[Debug] API Status: ${response.status} (Target DJ: ${CONFIG.DJ_ID})`);
-
-      // 460エラー検知時の処理（monitor.ts 内）
+      // 460エラー（トークン失効）検知
       if (response.status === 460) {
-        await sendBotMessage(` 🚨 **トークン失効を検知しました**\n監視が止まっています。\n\`!update monitor <token>\` または \`!update dj <token>\` で更新してください。`);
-
-        // process.exit(1) で PM2 に任せるのではなく、
-        // エラー時は「大幅な待機」を入れるか、manager に自分を止めさせる
-        console.log("通知を送信しました。1時間待機に入ります...");
-        await new Promise((resolve) => setTimeout(resolve, 3600000));
+        // ここで自動更新を試みる
+        console.log("🔄 トークン失効を検知。リフレッシュを試みます...");
+        const success = await monitorClient.tokenRefresh();
+        if (!success) {
+          await sendBotMessage(`🚨 **監視アカウントの復旧に失敗しました**\n手動ログインが必要です。`);
+          await new Promise((r) => setTimeout(r, 3600000));
+          continue;
+        }
+        console.log("✅ トークンが正常に更新されました。監視を続行します。");
+        continue; 
       }
 
       if (response.ok) {
         const data: any = await response.json();
-        //console.log(`[Debug] Is Live?: ${data.results.length > 0}`);
         const liveList = data.results || [];
+        // DJ_ID は monitorClient.logonUser.id などからも取得可能ですが、今のままでもOK
         const myLive = liveList.find((l: any) => l.author.id.toString() === CONFIG.DJ_ID);
-
         if (myLive && !workerProcess) {
           // --- 1. 配信開始：メタデータ生成 ---
           const liveId = myLive.id.toString();

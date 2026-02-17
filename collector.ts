@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import "dotenv/config";
 import { Client } from "pg";
+import { EventName } from "./events";
 
 const [, , liveId, liveStartTime, liveTitle, folderName] = process.argv;
 if (!liveId) process.exit(1);
@@ -13,8 +14,6 @@ const db = new Client({
   password: "Spoon_User",
   database: "spoon_monitor",
 });
-
-const CONFIG = { TOKEN: process.env.COLLECTOR_TOKEN! };
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -61,7 +60,6 @@ async function sendBotMessage(content: string) {
 async function finishStream(summary: any) {
   try {
     console.log("🗄️ データを PostgreSQL に保存中...");
-    await db.connect();
 
     // 1. 配信サマリーを保存し、その ID を取得
     const reportQuery = `
@@ -107,16 +105,59 @@ async function finishStream(summary: any) {
   }
 }
 
+async function setupClients() {
+  const djClient = new SpoonV2(Country.JAPAN);
+  await djClient.init();
+  
+  // トークンのセット（これで自動更新が有効になります）
+  await djClient.setToken(
+    process.env.DJ_ACCESS_TOKEN!,
+    process.env.DJ_REFRESH_TOKEN!
+  );
+
+  // 💡 【追加】トークンが更新された際に DB を同期する仕組み
+  // SpoonV2 内で tokenRefresh() が呼ばれると token プロパティが書き換わります
+  setInterval(async () => {
+    // DB への書き戻し処理（account_tokens テーブル等へ）
+    // これにより PM2 再起動時も最新トークンが維持されます
+    const query = `
+      INSERT INTO account_tokens (account_type, access_token, refresh_token, updated_at)
+      VALUES ('DJ', $1, $2, NOW())
+      ON CONFLICT (account_type) DO UPDATE 
+      SET access_token = EXCLUDED.access_token, 
+          refresh_token = EXCLUDED.refresh_token, 
+          updated_at = NOW();
+    `;
+    try {
+      await db.query(query, [djClient.token, djClient.refreshToken]);
+      // 2. (オプション) admin-api に通知して .env を更新させる
+      fetch('http://localhost:3000/api/sync-env', { method: 'POST' });
+
+    } catch (e:any) {
+      console.error("❌ トークン同期エラー:", e.message);
+    }
+  }, 1000 * 60 * 30); // 30分ごとに生存確認を兼ねて保存
+
+  return djClient;
+}
+
 async function startCollector() {
-  const client = new SpoonV2(Country.JAPAN);
-  await client.init();
-  await client.setToken(CONFIG.TOKEN);
+  const client = await setupClients();
 
   const live = client.live;
   const userStats = new Map<number, UserActivity>();
   let currentListeners = new Set<number>();
   let totalLikes = 0; // 💡 枠全体のいいね合計
   let pollInterval: NodeJS.Timeout;
+
+  // 💡 監視開始前にDBに接続しておく（未知イベントの即時記録用）
+  try {
+    await db.connect();
+    console.log("🐘 PostgreSQL 接続完了 (192.168.0.56)");
+  } catch (err:any) {
+    console.error("❌ DB接続失敗:", err.message);
+    process.exit(1);
+  }
 
   // 💡 共通の入室処理（二重カウント防止付）
   const handleEntry = (user: any, nowISO: string) => {
@@ -246,26 +287,65 @@ async function startCollector() {
 
   live.on("event:all", (eventName, payload) => {
     const nowISO = new Date().toISOString();
+    // const KNOWN_EVENTS = ["roomjoin", "chatmessage", "livefreelike"];
+    const KNOWN_EVENTS = Object.values(EventName).map(v => v.toLowerCase());
     const gen = payload.generator || payload.author || payload.user || payload;
     const userId = gen?.id || gen?.userId;
-    if (!userId) return;
+    const nickname = gen?.nickname || "リスナー";
+
+    // 💡 【修正点】自分自身（DJ/ボット）のイベントは完全に無視する
+    if (!userId || userId.toString() === process.env.DJ_ID) {
+      return; 
+    }
 
     handleEntry(gen, nowISO);
     const stats = userStats.get(userId)!;
     stats.lastSeen = nowISO;
 
-    const eName = eventName.toLowerCase();
+    const eName = eventName;
 
     // 💡 カウント処理の整理
-    if (eName.includes("chat")) {
+    if (eName === EventName.CHAT_MESSAGE) {
       stats.counts.chat++;
-    } else if (eName.includes("like")) {
+    } else if (eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE) {
       const count = payload.count || 1;
-      stats.counts.heart += count; // ユーザー個別のカウント
-      totalLikes += count; // 👈 枠全体のカウントをここで更新
-    } else if (eName.includes("present")) {
+      stats.counts.heart += count;
+      totalLikes += count;
+    } else if (eName === EventName.LIVE_DONATION) {
       stats.counts.spoon += payload.amount || 0;
     }
+
+    // --- 2. 未知のイベント処理（サブロジック：非同期・メインを妨げない） ---
+    // if (!KNOWN_EVENTS.some(e => eName.includes(e))) {
+    //   // 💡 await を付けずに実行することで、DB保存を待たずに次のチャット処理へ移れます
+    //   const query = `
+    //     INSERT INTO unknown_events (live_id, event_name, payload)
+    //     VALUES ($1, $2, $3);
+    //   `;
+    //   db.query(query, [liveId, eventName, JSON.stringify(payload)])
+    //     .then(() => console.log(`🔍 未知イベント保存完了: ${eventName}`))
+    //     .catch(err => console.error("❌ 未知イベント保存失敗:", err.message));
+    
+    //   // 💡 重要：ここでも await しないことで、メインループを止めません
+    // }
+
+    // --- 3. 自動ハーコメ機能 ---
+    // 自分自身のいいねを除外
+    if (eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE && gen?.id?.toString() !== process.env.DJ_ID) {
+      const namePrefix = `${nickname}さん\n`;
+      const count = payload.count || 1;
+
+      if (count === 1) {
+        live.message(`${namePrefix}ハートありがとう！`)
+          .catch(err => console.error("❌ ハートお礼送信失敗:", err.message));
+      } else if (count < 10) {
+        live.message(`${namePrefix}ミニバスターありがとう！`)
+          .catch(err => console.error("❌ ハートお礼送信失敗:", err.message));
+      } else {
+        live.message(`${namePrefix}バスターありがとう！`)
+          .catch(err => console.error("❌ ハートお礼送信失敗:", err.message));
+      }
+    } 
 
     // 💡 配信終了検知
     if (eventName === "LiveMetaUpdate" && (payload.streamStatus === "FINISHED" || payload.streamStatus === "STOP")) {
@@ -276,6 +356,11 @@ async function startCollector() {
   try {
     await live.join(liveId);
     console.log(`📡 収集開始 (Title: ${liveTitle})`);
+    // 💡 【デバッグ用】利用可能なメソッドをすべて表示
+    console.log("🛠️ Liveオブジェクトのプロパティ一覧:", 
+      Object.getOwnPropertyNames(Object.getPrototypeOf(live))
+        .filter(p => typeof (live as any)[p] === 'function')
+    );
   } catch (err) {
     console.error("❌ 入室失敗:", err);
     process.exit(1);
