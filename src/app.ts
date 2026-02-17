@@ -12,6 +12,17 @@ import { Client } from "pg";
 import { SpoonV2, Country, LogLevel } from "@sopia-bot/core";
 import { EventName } from "./spoon/events";
 import { loadAccountTokens, upsertAccountTokens } from "./db/token-store";
+import { sendDiscordMessage } from "./discord/notifier";
+
+const DISCORD_ALERT_THROTTLE_MS = Number(process.env.DISCORD_ALERT_THROTTLE_MS || "3600000"); // default: 1h
+const discordThrottleState = new Map<string, number>();
+const TOKEN_REFRESH_BACKOFF_MS = Number(process.env.TOKEN_REFRESH_BACKOFF_MS || "300000"); // default: 5min
+let tokenRefreshBackoffUntil = 0;
+const SPOON_HTTP_ANOMALY_BACKOFF_MS = Number(process.env.SPOON_HTTP_ANOMALY_BACKOFF_MS || "600000"); // default: 10min
+const TOKEN_EXPIRED_LOG_THROTTLE_MS = Number(process.env.TOKEN_EXPIRED_LOG_THROTTLE_MS || "60000"); // default: 60s
+let lastTokenExpiredLogAt = 0;
+const HTTP_ANOMALY_LOG_THROTTLE_MS = Number(process.env.HTTP_ANOMALY_LOG_THROTTLE_MS || "60000"); // default: 60s
+let lastHttpAnomalyLogAt = 0;
 
 const db = new Client({
   host: "192.168.0.56",
@@ -65,27 +76,21 @@ type Session = {
 };
 
 async function sendBotMessage(content: string) {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  const channelId = process.env.DISCORD_CHANNEL_ID;
+  try {
+    await sendDiscordMessage(content);
+  } catch (e: any) {
+    console.error("❌ Discord通知エラー:", e?.message || e);
+  }
+}
 
-  if (!token || !channelId) {
-    console.error("⚠️ Bot トークンまたはチャンネル ID が設定されていません。");
+async function sendBotMessageThrottled(key: string, content: string, minIntervalMs = DISCORD_ALERT_THROTTLE_MS) {
+  const now = Date.now();
+  const last = discordThrottleState.get(key) || 0;
+  if (now - last < minIntervalMs) {
     return;
   }
-
-  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bot ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ content }),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => null);
-    console.error("❌ Discord API エラー:", errorData || response.status);
-  }
+  discordThrottleState.set(key, now);
+  await sendBotMessage(content);
 }
 
 function makeFolderName(title: string) {
@@ -357,6 +362,9 @@ async function main() {
 
     const live = djClient.live;
 
+    // 配信開始通知（管理者DM/チャンネルは notifier の設定に従う）
+    await sendBotMessage(`🎬 **配信開始**\n🎤 タイトル: ${title}\n🆔 LiveId: ${liveId}\n🕒 開始: ${nowIso}`);
+
     const onEventAll = (eventName: any, payload: any) => {
       const nowISO = new Date().toISOString();
       const gen = payload.generator || payload.author || payload.user || payload;
@@ -428,6 +436,7 @@ async function main() {
     // リスナーポーリング（滞在時間用）
     const listenerPoller = setInterval(async () => {
       if (!session || session.finishing || session.liveId !== liveId) return;
+      if (tokenRefreshBackoffUntil && Date.now() < tokenRefreshBackoffUntil) return;
       try {
         const data = await djClient.api.live.getListeners(liveId);
         const latestListeners = data.results || [];
@@ -451,6 +460,7 @@ async function main() {
     // 終了確定（HTTP併用）
     const endChecker = setInterval(async () => {
       if (!session || session.finishing || session.liveId !== liveId) return;
+      if (tokenRefreshBackoffUntil && Date.now() < tokenRefreshBackoffUntil) return;
 
       let endEvidence = 0;
       try {
@@ -520,6 +530,10 @@ async function main() {
   const detectLoop = async () => {
     if (session) return;
     const detectClient = CONFIG.DETECT_ACCOUNT === "DJ" ? djClient : monitorClient;
+
+    // トークン失効(460)が続く間はバックオフしてAPI連打を避ける
+    if (tokenRefreshBackoffUntil && Date.now() < tokenRefreshBackoffUntil) return;
+
     try {
       // MONITOR検知: 購読配信一覧からDJの配信を見つける
       if (CONFIG.DETECT_ACCOUNT !== "DJ") {
@@ -724,14 +738,60 @@ async function main() {
     } catch (e: any) {
       // トークン失効などのときは refresh を試みる
       const status = e?.status_code || e?.error?.status_code;
+      const message = String(e?.message || "");
+
       if (status === 460) {
-        console.log(`🔄 ${CONFIG.DETECT_ACCOUNT}トークン失効を検知。リフレッシュを試みます...`);
-        const ok = await detectClient.tokenRefresh();
-        if (!ok) {
-          await sendBotMessage(`🚨 **${CONFIG.DETECT_ACCOUNT}アカウントの復旧に失敗しました**\n手動ログインが必要です。`);
+        // @sopia-bot/core 側で 460 のとき自動的に token refresh を試みます。
+        // ここでさらに tokenRefresh() を呼ぶと失敗ログが増幅するため、通知とバックオフだけ行います。
+        tokenRefreshBackoffUntil = Date.now() + TOKEN_REFRESH_BACKOFF_MS;
+
+        const now = Date.now();
+        if (now - lastTokenExpiredLogAt >= TOKEN_EXPIRED_LOG_THROTTLE_MS) {
+          lastTokenExpiredLogAt = now;
+          console.log(
+            `🔄 ${CONFIG.DETECT_ACCOUNT}トークン失効(460)。手動ログインが必要です。${Math.floor(
+              TOKEN_REFRESH_BACKOFF_MS / 1000
+            )}秒バックオフします。`
+          );
         }
+
+        await sendBotMessageThrottled(
+          `token-refresh-failed:${CONFIG.DETECT_ACCOUNT}`,
+          `🚨 **${CONFIG.DETECT_ACCOUNT}アカウントの復旧に失敗しました**\n手動ログインが必要です。\n次の再試行まで: ${Math.floor(
+            TOKEN_REFRESH_BACKOFF_MS / 1000
+          )}秒\n(このアラートはスパム防止のため間引き送信されます)`
+        );
         return;
       }
+
+      // 「通常の失敗ではない」系: JSONではなくHTMLが返る / refresh応答にJWTがない
+      // Cloudflare/メンテ/リダイレクト等でHTMLが返ると JSON.parse で落ちます。
+      const looksLikeHtmlJsonParse =
+        message.includes("Unexpected token '<'") ||
+        message.includes("is not valid JSON") ||
+        message.toLowerCase().includes("<html");
+      const looksLikeNoJwt = message.includes("No JWT in response");
+
+      if (looksLikeHtmlJsonParse || looksLikeNoJwt) {
+        tokenRefreshBackoffUntil = Date.now() + SPOON_HTTP_ANOMALY_BACKOFF_MS;
+
+        const now = Date.now();
+        if (now - lastHttpAnomalyLogAt >= HTTP_ANOMALY_LOG_THROTTLE_MS) {
+          lastHttpAnomalyLogAt = now;
+          console.log(
+            `⚠️ Spoon API異常応答の可能性。${Math.floor(SPOON_HTTP_ANOMALY_BACKOFF_MS / 1000)}秒バックオフします。 msg=${message.slice(0, 200)}`
+          );
+        }
+
+        await sendBotMessageThrottled(
+          `spoon-http-anomaly:${CONFIG.DETECT_ACCOUNT}`,
+          `🚨 **Spoon APIの応答が想定外です**\n${CONFIG.DETECT_ACCOUNT}でAPI呼び出しに失敗しました。\n\n症状: ${looksLikeNoJwt ? "Token refresh応答にJWTがありません" : "JSONではなくHTMLが返っている可能性"}\n次の再試行まで: ${Math.floor(
+            SPOON_HTTP_ANOMALY_BACKOFF_MS / 1000
+          )}秒\nエラー: ${message.slice(0, 180)}\n(このアラートはスパム防止のため間引き送信されます)`
+        );
+        return;
+      }
+
       console.warn("⚠️ detectLoop error:", e?.message || e);
     }
   };

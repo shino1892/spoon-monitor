@@ -1,56 +1,56 @@
 /**
- * 스푼라디오 라이브 프로토콜 v2 (Heimdallr2) 상수
+ * Spoon Radio ライブプロトコル v2（Heimdallr2）定数
  *
- * WebSocket 명령어와 이벤트 이름을 정의합니다.
+ * WebSocket のコマンドとイベント名を定義します。
  */
 
 /**
- * WebSocket 명령어 타입
+ * WebSocket コマンド種別
  */
 export const Command = {
-  /** 채널 활성화 (방 입장) */
+  /** チャンネル有効化（入室） */
   ACTIVATE_CHANNEL: 'ACTIVATE_CHANNEL',
-  /** 채널 비활성화 (방 퇴장) */
+  /** チャンネル無効化（退室） */
   DEACTIVATE_CHANNEL: 'DEACTIVATE_CHANNEL',
-  /** 메시지 수신 */
+  /** メッセージ受信 */
   MESSAGE: 'MESSAGE'
 } as const
 
 export type CommandType = (typeof Command)[keyof typeof Command]
 
 /**
- * 수신 이벤트 이름 (payload.body 내부의 eventName)
+ * 受信イベント名（payload.body 内の eventName）
  */
 export const EventName = {
-  /** 채팅 메시지 */
+  /** チャットメッセージ */
   CHAT_MESSAGE: 'ChatMessage',
-  /** 사용자 입장 */
+  /** ユーザー入室 */
   ROOM_JOIN: 'RoomJoin',
-  /** 사용자 강퇴/차단 */
+  /** ユーザーのキック/ブロック */
   ROOM_KICK: 'RoomKick',
-  /** 방송 메타데이터 업데이트 */
+  /** 配信メタデータ更新 */
   LIVE_META_UPDATE: 'LiveMetaUpdate',
-  /** 스티커 후원 */
+  /** ステッカー支援 */
   LIVE_DONATION: 'LiveDonation',
-  /** 무료 좋아요 */
+  /** 無料いいね */
   LIVE_FREE_LIKE: 'LiveFreeLike',
-  /** 유료 좋아요 */
+  /** 有料いいね */
   LIVE_PAID_LIKE: 'LivePaidLike',
-  /** 아이템 사용 */
+  /** アイテム使用 */
   LIVE_ITEM_USE: 'LiveItemUse',
-  /** 랭킹 변동 */
+  /** ランキング変動 */
   LIVE_RANK: 'LiveRank',
 
-  // 럭키박스/퀴즈 이벤트
-  /** 도네이션 트레이 (럭키박스/퀴즈 생성 알림) */
+  // ラッキーボックス/クイズイベント
+  /** ドネーショントレイ（ラッキーボックス/クイズ作成通知） */
   DONATION_TRAY: 'DonationTray',
-  /** 럭키박스 수락 (DJ가 럭키박스 열기) */
+  /** ラッキーボックス受付（DJがラッキーボックスを開く） */
   LUCKY_BOX_ACCEPT: 'LuckyBoxAccept',
-  /** 럭키박스 결과 */
+  /** ラッキーボックス結果 */
   LUCKY_BOX_RESULT: 'LuckyBoxResult',
-  /** 퀴즈 수락 (DJ가 퀴즈 열기) */
+  /** クイズ受付（DJがクイズを開く） */
   QUIZ_ACCEPT: 'QuizAccept',
-  /** 퀴즈 결과 */
+  /** クイズ結果 */
   QUIZ_RESULT: 'QuizResult'
 } as const
 
