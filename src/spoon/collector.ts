@@ -4,9 +4,12 @@ import path from "path";
 import "dotenv/config";
 import { Client } from "pg";
 import { EventName } from "./events";
+import { loadAccountTokens, upsertAccountTokens } from "../db/token-store";
 
-const [, , liveId, liveStartTime, liveTitle, folderName] = process.argv;
-if (!liveId) process.exit(1);
+const [, , liveIdRaw, liveStartTime, liveTitle, folderName] = process.argv;
+if (!liveIdRaw) process.exit(1);
+const liveId = Number(liveIdRaw);
+if (!Number.isFinite(liveId)) process.exit(1);
 
 const db = new Client({
   host: "192.168.0.56", // DBコンテナのIP
@@ -15,7 +18,7 @@ const db = new Client({
   database: "spoon_monitor",
 });
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 10_000;
 
 interface UserActivity {
   userId: number;
@@ -108,30 +111,46 @@ async function finishStream(summary: any) {
 async function setupClients() {
   const djClient = new SpoonV2(Country.JAPAN);
   await djClient.init();
-  
+
+  // DBを正とする（無ければ.envにフォールバック）
+  try {
+    await db.connect();
+  } catch (e: any) {
+    console.warn("⚠️ DB接続に失敗。トークン永続化なしで続行:", e?.message || e);
+  }
+
+  let accessToken = process.env.DJ_ACCESS_TOKEN;
+  let refreshToken = process.env.DJ_REFRESH_TOKEN;
+
+  try {
+    const fromDb = await loadAccountTokens(db, "DJ");
+    if (fromDb) {
+      accessToken = fromDb.accessToken;
+      refreshToken = fromDb.refreshToken;
+    }
+  } catch (e: any) {
+    console.warn("⚠️ DBトークン読み込み失敗。envで続行:", e?.message || e);
+  }
+
+  if (!accessToken || !refreshToken) {
+    throw new Error("DJ token is missing (DB/env)");
+  }
+
   // トークンのセット（これで自動更新が有効になります）
-  await djClient.setToken(
-    process.env.DJ_ACCESS_TOKEN!,
-    process.env.DJ_REFRESH_TOKEN!
-  );
+  await djClient.setToken(accessToken, refreshToken);
+
+  // 起動時点のトークンをDBへ反映
+  try {
+    await upsertAccountTokens(db, "DJ", djClient.token, djClient.refreshToken);
+  } catch (e: any) {
+    console.warn("⚠️ DBトークン保存失敗:", e?.message || e);
+  }
 
   // 💡 【追加】トークンが更新された際に DB を同期する仕組み
   // SpoonV2 内で tokenRefresh() が呼ばれると token プロパティが書き換わります
   setInterval(async () => {
-    // DB への書き戻し処理（account_tokens テーブル等へ）
-    // これにより PM2 再起動時も最新トークンが維持されます
-    const query = `
-      INSERT INTO account_tokens (account_type, access_token, refresh_token, updated_at)
-      VALUES ('DJ', $1, $2, NOW())
-      ON CONFLICT (account_type) DO UPDATE 
-      SET access_token = EXCLUDED.access_token, 
-          refresh_token = EXCLUDED.refresh_token, 
-          updated_at = NOW();
-    `;
     try {
-      await db.query(query, [djClient.token, djClient.refreshToken]);
-      // 2. (オプション) admin-api に通知して .env を更新させる
-      fetch('http://localhost:3000/api/sync-env', { method: 'POST' });
+      await upsertAccountTokens(db, "DJ", djClient.token, djClient.refreshToken);
 
     } catch (e:any) {
       console.error("❌ トークン同期エラー:", e.message);
@@ -150,14 +169,7 @@ async function startCollector() {
   let totalLikes = 0; // 💡 枠全体のいいね合計
   let pollInterval: NodeJS.Timeout;
 
-  // 💡 監視開始前にDBに接続しておく（未知イベントの即時記録用）
-  try {
-    await db.connect();
-    console.log("🐘 PostgreSQL 接続完了 (192.168.0.56)");
-  } catch (err:any) {
-    console.error("❌ DB接続失敗:", err.message);
-    process.exit(1);
-  }
+  // setupClients() 内でDB接続を試行済み（ここでは必須化しない）
 
   // 💡 共通の入室処理（二重カウント防止付）
   const handleEntry = (user: any, nowISO: string) => {
@@ -188,16 +200,7 @@ async function startCollector() {
 
   const pollListeners = async () => {
     try {
-      const url = `https://jp-api.spooncast.net/lives/${liveId}/listeners/?total_count=true`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${CONFIG.TOKEN}` } });
-
-      // レートリミット等で失敗した場合はスキップ
-      if (!res.ok) {
-        if (res.status === 429) console.warn("⚠️ レートリミットに抵触しています。間隔を広げてください。");
-        return;
-      }
-
-      const data: any = await res.json();
+      const data = await client.api.live.getListeners(liveId);
       const latestListeners = data.results || [];
       const latestIds = new Set<number>(latestListeners.map((u: any) => u.id));
       const nowISO = new Date().toISOString();
@@ -206,7 +209,7 @@ async function startCollector() {
       latestListeners.forEach((user: any) => {
         handleEntry(user, nowISO);
 
-        // 滞在時間の積み上げ (10秒)
+        // 滞在時間の積み上げ (POLL_INTERVAL_MS)
         const stats = userStats.get(user.id)!;
         stats.staySeconds += POLL_INTERVAL_MS / 1000;
         stats.lastSeen = nowISO;
@@ -223,8 +226,8 @@ async function startCollector() {
 
       // 💡 生存リストを最新に更新
       currentListeners = latestIds;
-    } catch (e) {
-      console.error("Polling Error:", e);
+    } catch (e: any) {
+      console.error("Polling Error:", e?.message || e);
     }
   };
 
@@ -275,7 +278,7 @@ async function startCollector() {
     }
   };
 
-  pollInterval = setInterval(pollListeners, 10000);
+  pollInterval = setInterval(pollListeners, POLL_INTERVAL_MS);
 
   pollListeners();
 
@@ -285,10 +288,8 @@ async function startCollector() {
   });
   process.on("SIGTERM", async () => await saveAndExit());
 
-  live.on("event:all", (eventName, payload) => {
+  live.on("event:all", (eventName: any, payload: any) => {
     const nowISO = new Date().toISOString();
-    // const KNOWN_EVENTS = ["roomjoin", "chatmessage", "livefreelike"];
-    const KNOWN_EVENTS = Object.values(EventName).map(v => v.toLowerCase());
     const gen = payload.generator || payload.author || payload.user || payload;
     const userId = gen?.id || gen?.userId;
     const nickname = gen?.nickname || "リスナー";
@@ -331,7 +332,7 @@ async function startCollector() {
 
     // --- 3. 自動ハーコメ機能 ---
     // 自分自身のいいねを除外
-    if (eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE && gen?.id?.toString() !== process.env.DJ_ID) {
+    if ((eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE) && userId?.toString() !== process.env.DJ_ID) {
       const namePrefix = `${nickname}さん\n`;
       const count = payload.count || 1;
 
@@ -348,7 +349,7 @@ async function startCollector() {
     } 
 
     // 💡 配信終了検知
-    if (eventName === "LiveMetaUpdate" && (payload.streamStatus === "FINISHED" || payload.streamStatus === "STOP")) {
+    if (eventName === EventName.LIVE_META_UPDATE && (payload.streamStatus === "FINISHED" || payload.streamStatus === "STOP")) {
       saveAndExit(); // ここは await なしでも saveAndExit 内部で処理されます
     }
   });
@@ -356,11 +357,14 @@ async function startCollector() {
   try {
     await live.join(liveId);
     console.log(`📡 収集開始 (Title: ${liveTitle})`);
-    // 💡 【デバッグ用】利用可能なメソッドをすべて表示
-    console.log("🛠️ Liveオブジェクトのプロパティ一覧:", 
-      Object.getOwnPropertyNames(Object.getPrototypeOf(live))
-        .filter(p => typeof (live as any)[p] === 'function')
-    );
+    if (process.env.DEBUG_LIVE_METHODS === "1") {
+      console.log(
+        "🛠️ Liveオブジェクトのプロパティ一覧:",
+        Object.getOwnPropertyNames(Object.getPrototypeOf(live)).filter(
+          (p) => typeof (live as any)[p] === "function"
+        )
+      );
+    }
   } catch (err) {
     console.error("❌ 入室失敗:", err);
     process.exit(1);

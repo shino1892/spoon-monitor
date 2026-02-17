@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from "child_process";
 import { SpoonV2, Country } from "@sopia-bot/core";
 import { Client } from "pg";
 import "dotenv/config";
+import { loadAccountTokens, upsertAccountTokens } from "../db/token-store";
 
 const db = new Client({
   host: "192.168.0.56", // DBコンテナのIP
@@ -50,31 +51,45 @@ async function setupClients() {
   const monitorClient = new SpoonV2(Country.JAPAN);
   await monitorClient.init();
   
+  // DBを正とする（無ければ.envにフォールバック）
+  try {
+    await db.connect();
+  } catch (e: any) {
+    console.warn("⚠️ DB接続に失敗。トークン永続化なしで続行:", e?.message || e);
+  }
+
+  let accessToken = process.env.MONITOR_ACCESS_TOKEN;
+  let refreshToken = process.env.MONITOR_REFRESH_TOKEN;
+
+  try {
+    const fromDb = await loadAccountTokens(db, "MONITOR");
+    if (fromDb) {
+      accessToken = fromDb.accessToken;
+      refreshToken = fromDb.refreshToken;
+    }
+  } catch (e: any) {
+    console.warn("⚠️ DBトークン読み込み失敗。envで続行:", e?.message || e);
+  }
+
+  if (!accessToken || !refreshToken) {
+    throw new Error("MONITOR token is missing (DB/env)");
+  }
+
   // トークンのセット（これで自動更新が有効になります）
-  await monitorClient.setToken(
-    process.env.MONITOR_ACCESS_TOKEN!,
-    process.env.MONITOR_REFRESH_TOKEN!
-  );
+  await monitorClient.setToken(accessToken, refreshToken);
+
+  // 起動時点のトークンをDBへ反映
+  try {
+    await upsertAccountTokens(db, "MONITOR", monitorClient.token, monitorClient.refreshToken);
+  } catch (e: any) {
+    console.warn("⚠️ DBトークン保存失敗:", e?.message || e);
+  }
 
   // 💡 【追加】トークンが更新された際に DB を同期する仕組み
   // SpoonV2 内で tokenRefresh() が呼ばれると token プロパティが書き換わります
   setInterval(async () => {
-    // DB への書き戻し処理（account_tokens テーブル等へ）
-    // これにより PM2 再起動時も最新トークンが維持されます
-    const query = `
-      INSERT INTO account_tokens (account_type, access_token, refresh_token, updated_at)
-      VALUES ('MONITOR', $1, $2, NOW())
-      ON CONFLICT (account_type) DO UPDATE 
-      SET access_token = EXCLUDED.access_token, 
-          refresh_token = EXCLUDED.refresh_token, 
-          updated_at = NOW();
-    `;
     try {
-      await db.query(query, [monitorClient.token, monitorClient.refreshToken]);
-
-    // 2. (オプション) admin-api に通知して .env を更新させる
-    fetch('http://localhost:3000/api/sync-env', { method: 'POST' });
-
+      await upsertAccountTokens(db, "MONITOR", monitorClient.token, monitorClient.refreshToken);
     } catch (e:any) {
       console.error("❌ トークン同期エラー:", e.message);
     }
@@ -93,33 +108,8 @@ async function monitor() {
     try {
       // 💡 クライアントが持っている最新のトークンを使用する
       // もし APIClient を直接使うのが難しい場合は、以下のように client.token を参照します
-      const url = `https://jp-api.spooncast.net/lives/subscribed/?ts=${Date.now()}`;
-      const response = await fetch(url, {
-        headers: {
-          // CONFIG.TOKEN ではなく、自動更新されている client.token を使う
-          Authorization: `Bearer ${monitorClient.token}`, 
-          "User-Agent": "Spoon/8.10.1 (Android; 13; ja-JP)",
-          "x-spoon-api-version": "2",
-        },
-      });
-
-      // 460エラー（トークン失効）検知
-      if (response.status === 460) {
-        // ここで自動更新を試みる
-        console.log("🔄 トークン失効を検知。リフレッシュを試みます...");
-        const success = await monitorClient.tokenRefresh();
-        if (!success) {
-          await sendBotMessage(`🚨 **監視アカウントの復旧に失敗しました**\n手動ログインが必要です。`);
-          await new Promise((r) => setTimeout(r, 3600000));
-          continue;
-        }
-        console.log("✅ トークンが正常に更新されました。監視を続行します。");
-        continue; 
-      }
-
-      if (response.ok) {
-        const data: any = await response.json();
-        const liveList = data.results || [];
+      const data = await monitorClient.api.live.getSubscribed({ page_size: 50, page: 1 });
+      const liveList = data.results || [];
         // DJ_ID は monitorClient.logonUser.id などからも取得可能ですが、今のままでもOK
         const myLive = liveList.find((l: any) => l.author.id.toString() === CONFIG.DJ_ID);
         if (myLive && !workerProcess) {
@@ -172,7 +162,6 @@ async function monitor() {
           }, 30000);
         }
         // ... (ステータス表示ロジック) ...
-      }
     } catch (err: any) {
       console.error(`\n⚠️ エラー:`, err.message);
     }
