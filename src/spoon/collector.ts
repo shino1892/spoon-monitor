@@ -18,8 +18,74 @@ const db = new Client({
   database: "spoon_monitor",
 });
 
-const POLL_INTERVAL_MS = 10_000;
+const POLL_INTERVAL_MS = (() => {
+  const raw = process.env.LISTENER_POLL_INTERVAL;
+  if (!raw) return 10_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000;
+})();
 let isDbConnected = false;
+
+const DEBUG_SPOON_EVENTS = process.env.SPOON_DEBUG_EVENTS === "1";
+const DEBUG_SPOON_PAYLOAD = process.env.SPOON_DEBUG_PAYLOAD === "1";
+const DEBUG_SPOON_UNKNOWN_EVENTS = process.env.SPOON_DEBUG_UNKNOWN_EVENTS === "1";
+const DEBUG_SPOON_MAX_CHARS = (() => {
+  const raw = process.env.SPOON_DEBUG_MAX_CHARS;
+  if (!raw) return 12_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 12_000;
+})();
+
+const SENSITIVE_KEYS = new Set(["authorization", "cookie", "set-cookie", "token", "access_token", "accessToken", "refresh_token", "refreshToken", "jwt", "roomJwt", "liveToken", "password"]);
+
+function truncateForLog(text: string, maxChars: number) {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 20))}... (truncated ${text.length - maxChars} chars)`;
+}
+
+function maskSecret(value: unknown) {
+  if (typeof value !== "string") return "[REDACTED]";
+  if (value.length <= 8) return "[REDACTED]";
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function sanitizeForLog(input: unknown, seen = new WeakSet<object>()): unknown {
+  if (input === null || input === undefined) return input;
+  if (typeof input === "bigint") return input.toString();
+  if (typeof input !== "object") return input;
+
+  const obj = input as Record<string, unknown>;
+  if (seen.has(obj)) return "[Circular]";
+  seen.add(obj);
+
+  if (Array.isArray(obj)) {
+    return obj.map((v) => sanitizeForLog(v, seen));
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const keyLower = k.toLowerCase();
+    if (SENSITIVE_KEYS.has(keyLower)) {
+      out[k] = maskSecret(v);
+      continue;
+    }
+    out[k] = sanitizeForLog(v, seen);
+  }
+  return out;
+}
+
+function dumpJson(label: string, value: unknown) {
+  const sanitized = sanitizeForLog(value);
+  const json = JSON.stringify(sanitized, null, 2);
+  console.log(`${label}:\n${truncateForLog(json, DEBUG_SPOON_MAX_CHARS)}`);
+}
+
+function toPositiveInt(value: unknown, fallback = 1) {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const i = Math.floor(n);
+  return i > 0 ? i : fallback;
+}
 
 interface UserActivity {
   userId: number;
@@ -96,10 +162,7 @@ async function finishStream(summary: any) {
 
     await db.query("COMMIT");
 
-    const verifyRes = await db.query(
-      "SELECT COUNT(*)::int AS count FROM listener_activities WHERE report_id = $1",
-      [reportId]
-    );
+    const verifyRes = await db.query("SELECT COUNT(*)::int AS count FROM listener_activities WHERE report_id = $1", [reportId]);
     console.log(`✅ DB保存完了 report_id=${reportId} listener_count=${verifyRes.rows[0].count}`);
 
     await sendBotMessage(`
@@ -278,51 +341,90 @@ async function startCollector() {
   });
   process.on("SIGTERM", async () => await saveAndExit());
 
-  live.on("event:all", (eventName: any, payload: any) => {
-    const nowISO = new Date().toISOString();
-    const gen = payload.generator || payload.author || payload.user || payload;
-    const userId = gen?.id || gen?.userId;
-    const nickname = gen?.nickname || "リスナー";
+  const knownEventNames = new Set<string>(Object.values(EventName));
+  const unknownEventNames = new Set<string>();
 
-    // 💡 【修正点】自分自身（DJ/ボット）のイベントは完全に無視する
-    if (!userId || userId.toString() === process.env.DJ_ID) {
-      return; 
+  live.on("event:all", (eventName: any, payload: any, raw: any) => {
+    const nowISO = new Date().toISOString();
+    const eName = String(eventName);
+    const gen = payload?.generator || payload?.author || payload?.user || payload;
+    const extractedUserId = gen?.id ?? gen?.userId ?? payload?.userId ?? payload?.memberId ?? payload?.authorId;
+    const userId = extractedUserId !== undefined && extractedUserId !== null ? Number(extractedUserId) : undefined;
+    const nickname = gen?.nickname || payload?.nickname || "リスナー";
+
+    const djId = process.env.DJ_ID;
+    const isSelf = userId !== undefined && djId && userId.toString() === djId;
+
+    if (DEBUG_SPOON_EVENTS) {
+      console.log(`[event] ${eName} userId=${userId ?? "(none)"} nick=${nickname} self=${isSelf}`);
+    }
+    if (DEBUG_SPOON_PAYLOAD) {
+      dumpJson(`[payload] ${eName}`, payload);
+      dumpJson(`[raw] ${eName}`, raw);
     }
 
-    handleEntry(gen, nowISO);
-    const stats = userStats.get(userId)!;
-    stats.lastSeen = nowISO;
+    if (DEBUG_SPOON_UNKNOWN_EVENTS && !knownEventNames.has(eName) && !unknownEventNames.has(eName)) {
+      unknownEventNames.add(eName);
+      console.warn(`⚠️ 未対応イベント検知: ${eName}`);
+      if (DEBUG_SPOON_PAYLOAD) {
+        dumpJson(`[unknown payload] ${eName}`, payload);
+        dumpJson(`[unknown raw] ${eName}`, raw);
+      }
+    }
 
-    const eName = eventName;
+    // 💡 自分自身（DJ/ボット）由来のユーザーイベントは無視
+    if (isSelf) return;
+
+    // 💡 userId が取れるイベントだけ入室/カウント処理をする（MetaUpdate等は userId が無い）
+    let stats: UserActivity | undefined;
+    if (userId !== undefined && Number.isFinite(userId)) {
+      handleEntry(gen, nowISO);
+      stats = userStats.get(userId);
+      if (stats) stats.lastSeen = nowISO;
+    }
+
+    if (userId !== undefined) {
+      console.log(`${nickname}さんから、${eName}を検知しました。`);
+    } else {
+      console.log(`${eName} を検知しました。`);
+    }
 
     // 💡 カウント処理の整理
-    if (eName === EventName.CHAT_MESSAGE) {
+    if (stats && eName === EventName.CHAT_MESSAGE) {
+      console.log(`「${payload.message}」を受信しました。`);
       stats.counts.chat++;
-    } else if (eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE) {
-      const count = payload.count || 1;
-      stats.counts.heart += count;
-      totalLikes += count;
-    } else if (eName === EventName.LIVE_DONATION) {
+    } else if (stats && (eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE)) {
+      // FreeLike は count, PaidLike は amount (core の型定義)
+      const likeCount = eName === EventName.LIVE_PAID_LIKE ? toPositiveInt(payload?.amount, 1) : toPositiveInt(payload?.count, 1);
+
+      stats.counts.heart += likeCount;
+      totalLikes += likeCount;
+
+      console.log(`ハート数：${likeCount}`);
+    } else if (stats && eName === EventName.LIVE_DONATION) {
       stats.counts.spoon += payload.amount || 0;
+
+      console.log(`${payload.amount}スプーンをもらいました。`);
     }
 
     // --- 3. 自動ハーコメ機能 ---
-    // 自分自身のいいねを除外
-    if ((eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE) && userId?.toString() !== process.env.DJ_ID) {
+    // 自分自身のいいねを除外（上で isSelf return 済み）
+    if (stats && (eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE)) {
       const namePrefix = `${nickname}さん\n`;
-      const count = payload.count || 1;
+      const likeCount = eName === EventName.LIVE_PAID_LIKE ? toPositiveInt(payload?.amount, 1) : toPositiveInt(payload?.count, 1);
 
-      if (count === 1) {
-        live.message(`${namePrefix}ハートありがとう！`)
-          .catch(err => console.error("❌ ハートお礼送信失敗:", err.message));
-      } else if (count < 10) {
-        live.message(`${namePrefix}ミニバスターありがとう！`)
-          .catch(err => console.error("❌ ハートお礼送信失敗:", err.message));
-      } else {
-        live.message(`${namePrefix}バスターありがとう！`)
-          .catch(err => console.error("❌ ハートお礼送信失敗:", err.message));
+      if (DEBUG_SPOON_EVENTS) {
+        console.log(`[auto-message] try send: event=${eName} count=${likeCount} userId=${userId}`);
       }
-    } 
+
+      if (likeCount === 1) {
+        live.message(`${namePrefix}ハートありがとう！`).catch((err) => console.error("❌ ハートお礼送信失敗:", err.message));
+      } else if (likeCount < 10) {
+        live.message(`${namePrefix}ミニバスターありがとう！`).catch((err) => console.error("❌ ハートお礼送信失敗:", err.message));
+      } else {
+        live.message(`${namePrefix}バスターありがとう！`).catch((err) => console.error("❌ ハートお礼送信失敗:", err.message));
+      }
+    }
 
     // 💡 配信終了検知
     if (eventName === EventName.LIVE_META_UPDATE && (payload.streamStatus === "FINISHED" || payload.streamStatus === "STOP")) {
@@ -338,9 +440,7 @@ async function startCollector() {
     if (process.env.DEBUG_LIVE_METHODS === "1") {
       console.log(
         "🛠️ Liveオブジェクトのプロパティ一覧:",
-        Object.getOwnPropertyNames(Object.getPrototypeOf(live)).filter(
-          (p) => typeof (live as any)[p] === "function"
-        )
+        Object.getOwnPropertyNames(Object.getPrototypeOf(live)).filter((p) => typeof (live as any)[p] === "function"),
       );
     }
   } catch (err) {

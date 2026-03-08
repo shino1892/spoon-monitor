@@ -30,7 +30,7 @@ export const EventName = {
   ROOM_KICK: 'RoomKick',
   /** 配信メタデータ更新 */
   LIVE_META_UPDATE: 'LiveMetaUpdate',
-  /** ステッカー支援 */
+  /** スポーン支援 */
   LIVE_DONATION: 'LiveDonation',
   /** 無料いいね */
   LIVE_FREE_LIKE: 'LiveFreeLike',
