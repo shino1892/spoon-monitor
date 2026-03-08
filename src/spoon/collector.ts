@@ -1,10 +1,10 @@
-import { SpoonV2, Country } from "@sopia-bot/core";
+// import { SpoonV2 } from "@sopia-bot/core";
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
 import { Client } from "pg";
 import { EventName } from "./events";
-import { loadAccountTokens, upsertAccountTokens } from "../db/token-store";
+import { initSpoon } from "../app";
 
 const [, , liveIdRaw, liveStartTime, liveTitle, folderName] = process.argv;
 if (!liveIdRaw) process.exit(1);
@@ -12,13 +12,14 @@ const liveId = Number(liveIdRaw);
 if (!Number.isFinite(liveId)) process.exit(1);
 
 const db = new Client({
-  host: "192.168.0.56", // DBコンテナのIP
+  host: "192.168.0.56",
   user: "spoon_user",
   password: "Spoon_User",
   database: "spoon_monitor",
 });
 
 const POLL_INTERVAL_MS = 10_000;
+let isDbConnected = false;
 
 interface UserActivity {
   userId: number;
@@ -61,10 +62,15 @@ async function sendBotMessage(content: string) {
 }
 
 async function finishStream(summary: any) {
+  if (!isDbConnected) {
+    throw new Error("DB未接続のため保存できません");
+  }
+
+  let reportId: number | null = null;
   try {
     console.log("🗄️ データを PostgreSQL に保存中...");
+    await db.query("BEGIN");
 
-    // 1. 配信サマリーを保存し、その ID を取得
     const reportQuery = `
       INSERT INTO live_reports (live_id, title, dj_name, duration, likes, created_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
@@ -72,15 +78,14 @@ async function finishStream(summary: any) {
     `;
     const reportValues = [summary.id, summary.title, summary.dj_name, summary.duration, summary.likes];
     const reportRes = await db.query(reportQuery, reportValues);
-    const reportId = reportRes.rows[0].id; // 👈 この ID をリスナーデータに使用
+    reportId = reportRes.rows[0].id;
 
-    // 2. リスナーデータを一括（またはループ）で保存
     console.log(`👥 リスナー ${summary.userStats.size} 名の活動記録を保存中...`);
 
     for (const [userId, stats] of summary.userStats) {
       const listenerQuery = `
         INSERT INTO listener_activities (
-          report_id, user_id, nickname, stay_seconds, entry_count, 
+          report_id, user_id, nickname, stay_seconds, entry_count,
           chat_count, heart_count, spoon_count, first_seen, last_seen
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
@@ -89,7 +94,14 @@ async function finishStream(summary: any) {
       await db.query(listenerQuery, listenerValues);
     }
 
-    // 3. Discord へレポート送信
+    await db.query("COMMIT");
+
+    const verifyRes = await db.query(
+      "SELECT COUNT(*)::int AS count FROM listener_activities WHERE report_id = $1",
+      [reportId]
+    );
+    console.log(`✅ DB保存完了 report_id=${reportId} listener_count=${verifyRes.rows[0].count}`);
+
     await sendBotMessage(`
 📊 **配信終了レポート (管理番号: ${reportId})**
 ━━━━━━━━━━━━━━
@@ -98,69 +110,36 @@ async function finishStream(summary: any) {
 ❤️ **合計いいね**: ${summary.likes}
 👥 **総リスナー数**: ${summary.userStats.size} 名
 ━━━━━━━━━━━━━━
-✅ 全リスナーの活動データも保存されました。
+✅ 全リスナーの活動データも保存されました。(保存件数: ${verifyRes.rows[0].count})
     `);
-  } catch (err) {
-    console.error("❌ 終了処理エラー:", err.message);
-  } finally {
-    await db.end();
-    process.exit(0);
+  } catch (err: any) {
+    try {
+      await db.query("ROLLBACK");
+    } catch {}
+    throw new Error(`終了処理エラー: ${err?.message || err}`);
   }
 }
 
 async function setupClients() {
-  const djClient = new SpoonV2(Country.JAPAN);
-  await djClient.init();
+  const djClient = await initSpoon("DJ");
 
-  // DBを正とする（無ければ.envにフォールバック）
+  // レポート保存用DB接続（トークンはenvのみで管理）
   try {
     await db.connect();
+    isDbConnected = true;
   } catch (e: any) {
-    console.warn("⚠️ DB接続に失敗。トークン永続化なしで続行:", e?.message || e);
+    isDbConnected = false;
+    console.warn("⚠️ DB接続に失敗。DB保存なしで続行:", e?.message || e);
   }
-
-  let accessToken = process.env.DJ_ACCESS_TOKEN;
-  let refreshToken = process.env.DJ_REFRESH_TOKEN;
-
-  try {
-    const fromDb = await loadAccountTokens(db, "DJ");
-    if (fromDb) {
-      accessToken = fromDb.accessToken;
-      refreshToken = fromDb.refreshToken;
-    }
-  } catch (e: any) {
-    console.warn("⚠️ DBトークン読み込み失敗。envで続行:", e?.message || e);
-  }
-
-  if (!accessToken || !refreshToken) {
-    throw new Error("DJ token is missing (DB/env)");
-  }
-
-  // トークンのセット（これで自動更新が有効になります）
-  await djClient.setToken(accessToken, refreshToken);
-
-  // 起動時点のトークンをDBへ反映
-  try {
-    await upsertAccountTokens(db, "DJ", djClient.token, djClient.refreshToken);
-  } catch (e: any) {
-    console.warn("⚠️ DBトークン保存失敗:", e?.message || e);
-  }
-
-  // 💡 【追加】トークンが更新された際に DB を同期する仕組み
-  // SpoonV2 内で tokenRefresh() が呼ばれると token プロパティが書き換わります
-  setInterval(async () => {
-    try {
-      await upsertAccountTokens(db, "DJ", djClient.token, djClient.refreshToken);
-
-    } catch (e:any) {
-      console.error("❌ トークン同期エラー:", e.message);
-    }
-  }, 1000 * 60 * 30); // 30分ごとに生存確認を兼ねて保存
 
   return djClient;
 }
 
 async function startCollector() {
+  const startupLog = `\n[${new Date().toLocaleTimeString()}] 🚀 collector 起動 (liveId: ${liveId})`;
+  console.log(startupLog);
+  await sendBotMessage(startupLog);
+
   const client = await setupClients();
 
   const live = client.live;
@@ -168,6 +147,7 @@ async function startCollector() {
   let currentListeners = new Set<number>();
   let totalLikes = 0; // 💡 枠全体のいいね合計
   let pollInterval: NodeJS.Timeout;
+  let isShuttingDown = false;
 
   // setupClients() 内でDB接続を試行済み（ここでは必須化しない）
 
@@ -233,6 +213,9 @@ async function startCollector() {
 
   // 💡 【統合・修正版】終了処理関数
   const saveAndExit = async () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
     if (pollInterval) clearInterval(pollInterval);
     console.log("🛑 配信終了処理を開始します...");
 
@@ -271,9 +254,16 @@ async function startCollector() {
 
       // 🚀 PostgreSQL保存 & Discord通知 (await で完了を待つ)
       await finishStream(summaryForDB);
-    } catch (e) {
-      console.error("❌ 終了保存エラー:", e);
+    } catch (e: any) {
+      const message = `❌ 終了保存エラー: ${e?.message || e}`;
+      console.error(message);
+      await sendBotMessage(message);
     } finally {
+      if (isDbConnected) {
+        try {
+          await db.end();
+        } catch {}
+      }
       process.exit(0);
     }
   };
@@ -316,20 +306,6 @@ async function startCollector() {
       stats.counts.spoon += payload.amount || 0;
     }
 
-    // --- 2. 未知のイベント処理（サブロジック：非同期・メインを妨げない） ---
-    // if (!KNOWN_EVENTS.some(e => eName.includes(e))) {
-    //   // 💡 await を付けずに実行することで、DB保存を待たずに次のチャット処理へ移れます
-    //   const query = `
-    //     INSERT INTO unknown_events (live_id, event_name, payload)
-    //     VALUES ($1, $2, $3);
-    //   `;
-    //   db.query(query, [liveId, eventName, JSON.stringify(payload)])
-    //     .then(() => console.log(`🔍 未知イベント保存完了: ${eventName}`))
-    //     .catch(err => console.error("❌ 未知イベント保存失敗:", err.message));
-    
-    //   // 💡 重要：ここでも await しないことで、メインループを止めません
-    // }
-
     // --- 3. 自動ハーコメ機能 ---
     // 自分自身のいいねを除外
     if ((eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE) && userId?.toString() !== process.env.DJ_ID) {
@@ -356,7 +332,9 @@ async function startCollector() {
 
   try {
     await live.join(liveId);
-    console.log(`📡 収集開始 (Title: ${liveTitle})`);
+    const collectStartLog = `📡 収集開始 (Title: ${liveTitle})`;
+    console.log(collectStartLog);
+    await sendBotMessage(collectStartLog);
     if (process.env.DEBUG_LIVE_METHODS === "1") {
       console.log(
         "🛠️ Liveオブジェクトのプロパティ一覧:",

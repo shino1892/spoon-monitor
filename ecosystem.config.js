@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "spoon-app",
       script: "pnpm",
-      args: "tsx src/app.ts", // 監視+収集 統合
+      args: "tsx src/spoon/monitor.ts", // 監視(検知) + collector起動
       autorestart: true,
       watch: false,
       env: {

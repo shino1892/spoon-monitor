@@ -1,15 +1,6 @@
 import { spawn, ChildProcess } from "child_process";
-import { SpoonV2, Country } from "@sopia-bot/core";
-import { Client } from "pg";
 import "dotenv/config";
-import { loadAccountTokens, upsertAccountTokens } from "../db/token-store";
-
-const db = new Client({
-  host: "192.168.0.56", // DBコンテナのIP
-  user: "spoon_user",
-  password: "Spoon_User",
-  database: "spoon_monitor",
-});
+import { initSpoon } from "../app";
 
 const CONFIG = {
   DJ_ID: process.env.DJ_ID!,
@@ -48,65 +39,19 @@ async function sendBotMessage(content: string) {
 }
 
 async function setupClients() {
-  const monitorClient = new SpoonV2(Country.JAPAN);
-  await monitorClient.init();
-  
-  // DBを正とする（無ければ.envにフォールバック）
-  try {
-    await db.connect();
-  } catch (e: any) {
-    console.warn("⚠️ DB接続に失敗。トークン永続化なしで続行:", e?.message || e);
-  }
-
-  let accessToken = process.env.MONITOR_ACCESS_TOKEN;
-  let refreshToken = process.env.MONITOR_REFRESH_TOKEN;
-
-  try {
-    const fromDb = await loadAccountTokens(db, "MONITOR");
-    if (fromDb) {
-      accessToken = fromDb.accessToken;
-      refreshToken = fromDb.refreshToken;
-    }
-  } catch (e: any) {
-    console.warn("⚠️ DBトークン読み込み失敗。envで続行:", e?.message || e);
-  }
-
-  if (!accessToken || !refreshToken) {
-    throw new Error("MONITOR token is missing (DB/env)");
-  }
-
-  // トークンのセット（これで自動更新が有効になります）
-  await monitorClient.setToken(accessToken, refreshToken);
-
-  // 起動時点のトークンをDBへ反映
-  try {
-    await upsertAccountTokens(db, "MONITOR", monitorClient.token, monitorClient.refreshToken);
-  } catch (e: any) {
-    console.warn("⚠️ DBトークン保存失敗:", e?.message || e);
-  }
-
-  // 💡 【追加】トークンが更新された際に DB を同期する仕組み
-  // SpoonV2 内で tokenRefresh() が呼ばれると token プロパティが書き換わります
-  setInterval(async () => {
-    try {
-      await upsertAccountTokens(db, "MONITOR", monitorClient.token, monitorClient.refreshToken);
-    } catch (e:any) {
-      console.error("❌ トークン同期エラー:", e.message);
-    }
-  }, 1000 * 60 * 30); // 30分ごとに生存確認を兼ねて保存
-
-  return monitorClient;
+  return await initSpoon("MONITOR");
 }
 
 async function monitor() {
-  console.log(`\n[${new Date().toLocaleTimeString()}] 🚀 精密監視システム 起動`);
+  const startupLog = `\n[${new Date().toLocaleTimeString()}] 🚀 監視システム 起動`;
+  console.log(startupLog);
+  await sendBotMessage(startupLog);
 
   // 💡 【重要】監視用クライアントを初期化
   const monitorClient = await setupClients(); 
   
   while (true) {
     try {
-      // 💡 クライアントが持っている最新のトークンを使用する
       // もし APIClient を直接使うのが難しい場合は、以下のように client.token を参照します
       const data = await monitorClient.api.live.getSubscribed({ page_size: 50, page: 1 });
       const liveList = data.results || [];
@@ -138,7 +83,7 @@ async function monitor() {
           isStopping = false;
           // 引数として startTime, safeTitle, folderName を追加
           // index.ts の修正箇所
-          workerProcess = spawn("pnpm", ["tsx", "collector.ts", liveId, startTime, safeTitle, folderName], {
+          workerProcess = spawn("pnpm", ["tsx", "src/spoon/collector.ts", liveId, startTime, safeTitle, folderName], {
             stdio: ["pipe", "inherit", "inherit", "ipc"],
             shell: true,
           });
