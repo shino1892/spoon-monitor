@@ -75,13 +75,22 @@ DISCORD_GUILD_ID=
 # 監視・収集の間隔など
 CHECK_INTERVAL=30000
 LISTENER_POLL_INTERVAL=10000
-END_CHECK_INTERVAL=15000
 
-# Discord 通知の抑制（スパム防止）
-DISCORD_ALERT_THROTTLE_MS=3600000
+# Live オブジェクトのメソッド一覧を出力（collector.ts）
+DEBUG_LIVE_METHODS=0
 
 # @sopia-bot/core の HTTP デバッグ（Authorization が出る可能性があるため通常は無効推奨）
 SOPIA_HTTP_DEBUG=0
+
+# Spoon WebSocket イベントのデバッグ（collector.ts）
+# イベント概要ログ（イベント名/userId等）
+SPOON_DEBUG_EVENTS=0
+# payload/raw を JSON で出力（キー名ベースで一部マスクしますが、個人情報が含まれる可能性があるので注意）
+SPOON_DEBUG_PAYLOAD=0
+# 未対応（EventName に無い）イベント名を検知して一度だけ警告ログ
+SPOON_DEBUG_UNKNOWN_EVENTS=0
+# payload JSON の最大出力文字数（肥大化防止）
+SPOON_DEBUG_MAX_CHARS=12000
 ```
 
 ### 3) PostgreSQL の準備
@@ -167,7 +176,7 @@ pm2 restart all
 
 ### `spoon-app`
 
-- `monitor.ts` が `DETECT_ACCOUNT`（既定: `MONITOR`）の購読一覧から、`DJ_ID` の配信開始/終了を検知します。
+- `monitor.ts` が MONITOR アカウントの購読一覧から、`DJ_ID` の配信開始/終了を検知します。
 - 配信検知後に `collector.ts` を起動し、配信中の滞在/イベントを集計、終了時に DB 保存と Discord 通知を実行します。
 
 ### `spoon-manager`（Discord Slash Commands）
@@ -191,5 +200,3 @@ pm2 restart all
 ## 運用メモ
 
 - `.env` にはアクセストークン/リフレッシュトークンが含まれます。誤ってコミットしないでください。
-- `SOPIA_HTTP_DEBUG=1` は HTTP の詳細ログを出すため、Authorization がログに混ざる可能性があります（通常は無効推奨）。
-
