@@ -4,8 +4,8 @@ module.exports = {
     // 必要になった場合のみ、下の定義を有効化してください。
     // {
     //   name: "spoon-app",
-    //   script: "pnpm",
-    //   args: "tsx src/spoon/monitor.ts", // 監視(検知) + collector起動
+    //   script: "cmd",
+    //   args: "/c pnpm tsx src/spoon/monitor.ts", // 監視(検知) + collector起動
     //   autorestart: true,
     //   watch: false,
     //   env: {
@@ -18,8 +18,8 @@ module.exports = {
     // },
     {
       name: "spoon-manager",
-      script: "pnpm",
-      args: "tsx src/discord/bot.ts", // Discord操作・更新用
+      script: "cmd",
+      args: "/c pnpm tsx src/discord/bot.ts", // Discord操作・更新用
       autorestart: true,
       watch: false,
       env: {
