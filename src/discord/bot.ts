@@ -5,6 +5,8 @@ import fs from "fs";
 import path from "path";
 import { initSpoon } from "../app";
 
+console.log("🚀 Starting Discord bot...");
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const ADMIN_ID = process.env.ADMIN_ID;
 
@@ -108,7 +110,7 @@ async function registerCommands() {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is required");
 
-  const appId = process.env.DISCORD_APP_ID || client.application?.id;
+  const appId = process.env.DISCORD_APP_ID || client.application?.id || client.user?.id;
   if (!appId) throw new Error("DISCORD_APP_ID is required (or wait until client.application.id is available)");
 
   const guildId = process.env.DISCORD_GUILD_ID;
@@ -232,7 +234,8 @@ client.on("interactionCreate", async (interaction) => {
   await handleInteraction(interaction);
 });
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
+  console.log(`✅ Ready as ${client.user?.tag ?? "(unknown)"}`);
   try {
     await registerCommands();
   } catch (e: any) {
@@ -240,4 +243,7 @@ client.once("ready", async () => {
   }
 });
 
-client.login(process.env.DISCORD_BOT_TOKEN);
+client
+  .login(process.env.DISCORD_BOT_TOKEN)
+  .then(() => console.log("🔐 login() resolved"))
+  .catch((e) => console.error("❌ login() failed:", e?.message || e));
