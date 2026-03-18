@@ -53,7 +53,7 @@ async function sendBotMessage(content: string) {
       const errorData = await response.json();
       console.error("❌ Discord API エラー:", errorData);
     }
-  } catch (error) {
+  } catch (error : any) {
     console.error("❌ 送信中にエラーが発生しました:", error.message);
   }
 }
@@ -246,8 +246,8 @@ async function startCollector() {
 
   live.on("event:all", (eventName, payload) => {
     const nowISO = new Date().toISOString();
-    const gen = payload.generator || payload.author || payload.user || payload;
-    const userId = gen?.id || gen?.userId;
+    const gen = (payload as any).generator || (payload as any).author || (payload as any).user || payload;
+    const userId = (gen as any)?.id || (gen as any)?.userId;
     if (!userId) return;
 
     handleEntry(gen, nowISO);
@@ -260,21 +260,21 @@ async function startCollector() {
     if (eName.includes("chat")) {
       stats.counts.chat++;
     } else if (eName.includes("like")) {
-      const count = payload.count || 1;
+      const count = (payload as any).count || 1;
       stats.counts.heart += count; // ユーザー個別のカウント
       totalLikes += count; // 👈 枠全体のカウントをここで更新
     } else if (eName.includes("present")) {
-      stats.counts.spoon += payload.amount || 0;
+      stats.counts.spoon += (payload as any).amount || 0;
     }
 
     // 💡 配信終了検知
-    if (eventName === "LiveMetaUpdate" && (payload.streamStatus === "FINISHED" || payload.streamStatus === "STOP")) {
+    if (eventName === "LiveMetaUpdate" && (payload as any).streamStatus && ((payload as any).streamStatus === "FINISHED" || (payload as any).streamStatus === "STOP")) {
       saveAndExit(); // ここは await なしでも saveAndExit 内部で処理されます
     }
   });
 
   try {
-    await live.join(liveId);
+    await live.join(parseInt(liveId));
     console.log(`📡 収集開始 (Title: ${liveTitle})`);
   } catch (err) {
     console.error("❌ 入室失敗:", err);

@@ -33,7 +33,7 @@ async function sendBotMessage(content: string) {
       const errorData = await response.json();
       console.error("❌ Discord API エラー:", errorData);
     }
-  } catch (error) {
+  } catch (error : any) {
     console.error("❌ 送信中にエラーが発生しました:", error.message);
   }
 }
