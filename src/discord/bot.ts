@@ -1,6 +1,5 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChatInputCommandInteraction } from "discord.js";
-import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
 import { initSpoon } from "../app";
@@ -16,19 +15,6 @@ let isChecking = false;
 
 function isAdmin(userId: string | null | undefined) {
   return !!ADMIN_ID && !!userId && userId === ADMIN_ID;
-}
-
-function envPath() {
-  return path.join(process.cwd(), ".env");
-}
-
-function execAsync(command: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    exec(command, (err, stdout, stderr) => {
-      if (err) return reject(Object.assign(err, { stdout, stderr }));
-      resolve({ stdout, stderr });
-    });
-  });
 }
 
 function sleep(ms: number) {
@@ -114,15 +100,8 @@ async function registerCommands() {
   if (!appId) throw new Error("DISCORD_APP_ID is required (or wait until client.application.id is available)");
 
   const guildId = process.env.DISCORD_GUILD_ID;
-  const commands = [
-    new SlashCommandBuilder().setName("status").setDescription("監視プロセスの状態を表示"),
-    new SlashCommandBuilder().setName("lastsummary").setDescription("最新の summary.json の概要を表示"),
-    new SlashCommandBuilder().setName("check").setDescription("配信状況を最大30秒だけチェック（2秒間隔）"),
-    new SlashCommandBuilder()
-      .setName("restart")
-      .setDescription("spoon-app を再起動")
-      .addBooleanOption((o) => o.setName("confirm").setDescription("true で実行").setRequired(true)),
-  ].map((c) => c.toJSON());
+
+  const commands = [new SlashCommandBuilder().setName("lastsummary").setDescription("最新の summary.json の概要を表示"), new SlashCommandBuilder().setName("check").setDescription("配信状況を最大30秒だけチェック（2秒間隔）")].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(token);
   if (guildId) {
@@ -173,27 +152,6 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  if (name === "status") {
-    await interaction.deferReply({ ephemeral: true });
-    try {
-      const { stdout } = await execAsync("pm2 jlist");
-      const list = JSON.parse(stdout) as any[];
-      const app = list.find((p) => p.name === "spoon-app");
-      if (!app) {
-        await interaction.editReply("⚠️ pm2 に spoon-app が見つかりませんでした。");
-        return;
-      }
-      const st = app.pm2_env?.status || "unknown";
-      const restarts = app.pm2_env?.restart_time ?? "?";
-      const uptime = app.pm2_env?.pm_uptime ? Math.floor((Date.now() - app.pm2_env.pm_uptime) / 1000) : null;
-      const mem = app.monit?.memory ? Math.round(app.monit.memory / 1024 / 1024) : null;
-      await interaction.editReply(`🧩 spoon-app\n- status: ${st}\n- restarts: ${restarts}\n- uptime: ${uptime ?? "?"}s\n- mem: ${mem ?? "?"}MB`);
-    } catch (e: any) {
-      await interaction.editReply(`❌ status 取得失敗: ${e?.message || e}`);
-    }
-    return;
-  }
-
   if (name === "lastsummary") {
     await interaction.deferReply({ ephemeral: true });
     try {
@@ -206,22 +164,6 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
       await interaction.editReply(`📄 最新 summary\n- folder: ${s.folderName}\n- title: ${s.title}\n- liveId: ${s.liveId}\n- duration: ${s.durationSeconds}s\n- users: ${s.usersCount}\n\n🏆 top stay\n${top || "(no users)"}`);
     } catch (e: any) {
       await interaction.editReply(`❌ 読み込み失敗: ${e?.message || e}`);
-    }
-    return;
-  }
-
-  if (name === "restart") {
-    const confirm = interaction.options.getBoolean("confirm", true);
-    if (!confirm) {
-      await interaction.reply({ content: "⚠️ confirm=true のときだけ実行します。", ephemeral: true });
-      return;
-    }
-    await interaction.deferReply({ ephemeral: true });
-    try {
-      await execAsync("pm2 restart spoon-app");
-      await interaction.editReply("🔄 spoon-app を再起動しました。");
-    } catch (e: any) {
-      await interaction.editReply(`❌ 再起動失敗: ${e?.message || e}`);
     }
     return;
   }

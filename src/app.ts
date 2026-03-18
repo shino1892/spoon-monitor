@@ -23,5 +23,5 @@ export async function initSpoon(type: "DJ" | "MONITOR") {
 }
 
 if (require.main === module) {
-  console.log("ℹ️ app.ts は共通ログイン関数モジュールです。実行は `pnpm tsx src/spoon/monitor.ts` を使用してください。");
+  console.log("ℹ️ app.ts は共通ログイン関数モジュールです。単体実行は想定していません。");
 }
