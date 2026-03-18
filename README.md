@@ -1,37 +1,101 @@
 # spoon-monitor
 
-## 目的
+## 重要: 配信検知はオンデマンド化
 
-Spoon への常時スクレイピング/定期ポーリングを避けるため、配信検知は Discord のスラッシュコマンド `/check` 実行時のみ行います。
+Spoon 運営からの警告に合わせ、常時の配信検知（定期リクエスト）を避けるため、配信検知は Discord のスラッシュコマンド `/check` 実行時のみ行います。
 
-`/check` 実行後、最大30秒間だけ 2秒ごとに Spoon API へリクエストして「配信中/配信なし」を返します（検知通知のみ。collector の自動起動はしません）。
+- `/check` 実行後、最大30秒間だけ 2秒ごとに Spoon API を叩いて「配信中/配信なし」を返します（ephemeral 返信）
+- 検知のみ（collector の自動起動はしません）
 
-## 起動（PM2）
+PM2 定義は [ecosystem.config.js](ecosystem.config.js) を参照してください（`spoon-app` はデフォルトでコメントアウトされています）。
 
-このプロジェクトは `spoon-manager`（Discord bot）のみ常駐します。
+## 構成
 
-- `pm2 start ecosystem.config.js`
-- `pm2 logs spoon-manager`
+- [src/app.ts](src/app.ts)：共通ログイン処理（`initSpoon`）
+- [src/spoon/monitor.ts](src/spoon/monitor.ts)：（レガシー）常時監視プロセス（collector 起動担当）
+- [src/spoon/collector.ts](src/spoon/collector.ts)：配信中の収集・保存プロセス
+- [src/discord/bot.ts](src/discord/bot.ts)：Discord 管理 Bot（Slash Command）プロセス
 
-## Discord コマンド
+## 前提
 
-### `/check`
+- Node.js（`tsx` が動くバージョン）
+- `pnpm`
+- `pm2`（常駐運用する場合）
+- PostgreSQL（配信レポート保存用）
+- Discord Bot（通知・管理コマンド用）
 
-- 実行すると、最大30秒・2秒間隔で配信状況をチェックします（ephemeral で返信）
-- 実行できるのは `ADMIN_ID` のユーザーのみです
+### SOPIA 依存について
 
-### `!update monitor <token>`
+`package.json` の `@sopia-bot/core` はローカル参照です。既存の SOPIA プロジェクト配置が必要な場合があります。
 
-- `.env` の `MONITOR_TOKEN` を更新します
-- 更新後は再起動なしで `/check` に反映されます
+## セットアップ
 
-## 必要な環境変数（.env）
+### 1) 依存関係インストール
 
-- `DISCORD_BOT_TOKEN`
-- `DISCORD_CHANNEL_ID`
-- `DISCORD_GUILD_ID`（`/check` を登録したいサーバーID）
-- `ADMIN_ID`
-- `DJ_ID`
-- `MONITOR_TOKEN`
+```bash
+pnpm install
+```
 
-（参考）既存の収集機能を使う場合は `COLLECTOR_TOKEN` も必要です。
+### 2) `.env` を作成
+
+`.env.example` を参考に `.env` を作成してください。
+
+最低限 `/check` で検知する場合は以下が必要です。
+
+```env
+DJ_ID=
+MONITOR_ACCESS_TOKEN=
+MONITOR_REFRESH_TOKEN=
+
+DISCORD_BOT_TOKEN=
+ADMIN_ID=
+
+# 任意（反映が速いギルド登録を使う場合）
+DISCORD_GUILD_ID=
+
+# 推奨（BotのApplication ID。無くても動く場合があります）
+DISCORD_APP_ID=
+```
+
+## 起動方法
+
+### 開発/単体起動（PM2なし）
+
+Discord 管理 Bot:
+
+```bash
+pnpm tsx src/discord/bot.ts
+```
+
+### PM2 運用
+
+起動:
+
+```bash
+pm2 start ecosystem.config.js
+pm2 save
+```
+
+ログ:
+
+```bash
+pm2 logs spoon-manager
+```
+
+## 使い方（Discord Slash Commands）
+
+管理者（`ADMIN_ID`）のみ利用可能:
+
+- `/check`：最大30秒・2秒間隔で配信状況をチェック（オンデマンド検知）
+- `/status`：PM2 上の `spoon-app` の状態を表示（※ `spoon-app` を有効化している場合のみ）
+- `/lastsummary`：`data/` 配下の最新 `summary.json` の概要を表示
+- `/restart confirm:true`：`spoon-app` を再起動（※ `spoon-app` を有効化している場合のみ）
+
+## データ
+
+- `data/<timestamp>_<title>/summary.json` に配信サマリーを保存します。
+- Discord の `/lastsummary` はこのファイルを参照して概要を返します。
+
+## 運用メモ
+
+- `.env` にはアクセストークン/リフレッシュトークンが含まれます。誤ってコミットしないでください。

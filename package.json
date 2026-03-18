@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "check": "tsc -p tsconfig.json --noEmit",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -11,8 +12,19 @@
   "license": "ISC",
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
-    "@sopia-bot/core": "link:..\\spoon\\packages\\core",
+    "@sopia-bot/core": "file:./sopia-core",
+    "axios": "^1.13.5",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.3",
     "discord.js": "^14.25.1",
-    "dotenv": "^17.2.4"
+    "dotenv": "^17.2.4",
+    "pg": "^8.18.0",
+    "reflect-metadata": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/pg": "^8.16.0",
+    "typescript": "^5.9.2",
+    "tsx": "^4.21.0"
   }
 }
