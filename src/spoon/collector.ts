@@ -14,7 +14,7 @@ const liveId = Number(liveIdRaw);
 if (!Number.isFinite(liveId)) process.exit(1);
 
 const db = new Client({
-  host: "192.168.0.56",
+  host: "192.168.0.109",
   user: "spoon_user",
   password: "Spoon_User",
   database: "spoon_monitor",
