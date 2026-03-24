@@ -7,6 +7,7 @@ import { v2 } from "@sopia-bot/core";
 import { initSpoon } from "../app";
 
 const { EventName } = v2;
+const ROOM_CLOSE_EVENT_NAME = "RoomClose";
 
 const [, , liveIdRaw, liveStartTime, liveTitle, folderName] = process.argv;
 if (!liveIdRaw) process.exit(1);
@@ -25,12 +26,6 @@ const POLL_INTERVAL_MS = (() => {
   if (!raw) return 10_000;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000;
-})();
-const END_CHECK_INTERVAL_MS = (() => {
-  const raw = process.env.LIVE_END_CHECK_INTERVAL;
-  if (!raw) return 15_000;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 15_000;
 })();
 let isDbConnected = false;
 
@@ -93,25 +88,6 @@ function toPositiveInt(value: unknown, fallback = 1) {
   if (!Number.isFinite(n)) return fallback;
   const i = Math.floor(n);
   return i > 0 ? i : fallback;
-}
-
-function isFinishedMetaPayload(payload: any) {
-  const statusRaw = payload?.streamStatus ?? payload?.stream_status ?? payload?.status;
-  const status = typeof statusRaw === "string" ? statusRaw.toUpperCase() : "";
-
-  if (["FINISHED", "FINISH", "STOP", "STOPPED", "END", "ENDED", "CLOSE", "CLOSED"].includes(status)) {
-    return true;
-  }
-
-  if (payload?.closed === true) return true;
-
-  const closeStatus = Number(payload?.close_status ?? payload?.closeStatus);
-  if (Number.isFinite(closeStatus) && (closeStatus === 2 || closeStatus === -2)) return true;
-
-  const numericStatus = Number(payload?.status);
-  if (Number.isFinite(numericStatus) && (numericStatus === 2 || numericStatus === -2)) return true;
-
-  return false;
 }
 
 interface UserActivity {
@@ -237,7 +213,6 @@ async function startCollector() {
   let currentListeners = new Set<number>();
   let totalLikes = 0; // 💡 枠全体のいいね合計
   let pollInterval: NodeJS.Timeout;
-  let endCheckInterval: NodeJS.Timeout;
   let isShuttingDown = false;
 
   // setupClients() 内でDB接続を試行済み（ここでは必須化しない）
@@ -302,37 +277,12 @@ async function startCollector() {
     }
   };
 
-  const checkLiveEndedByApi = async () => {
-    if (isShuttingDown) return;
-    try {
-      const info = await client.api.live.getInfo(liveId);
-      const endedByClosed = info?.closed === true;
-      const endedByStatus = info?.status === 2 || info?.status === -2;
-      const endedByCloseStatus = info?.close_status === 2 || info?.close_status === -2;
-
-      if (endedByClosed || endedByStatus || endedByCloseStatus) {
-        console.log("🛑 API で配信終了を検知しました。終了処理に入ります。");
-        await saveAndExit();
-      }
-    } catch (e: any) {
-      const message = String(e?.message || e || "").toLowerCase();
-      // 配信終了後は取得APIが 404/Not Found になるケースがあるため終了扱いにする
-      if (message.includes("404") || message.includes("not found")) {
-        console.log("🛑 API 404 により配信終了を検知しました。終了処理に入ります。");
-        await saveAndExit();
-        return;
-      }
-      console.warn("⚠️ 終了確認APIでエラー（継続）:", e?.message || e);
-    }
-  };
-
   // 💡 【統合・修正版】終了処理関数
   const saveAndExit = async () => {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
     if (pollInterval) clearInterval(pollInterval);
-    if (endCheckInterval) clearInterval(endCheckInterval);
     console.log("🛑 配信終了処理を開始します...");
 
     const liveEndTime = new Date().toISOString();
@@ -385,12 +335,8 @@ async function startCollector() {
   };
 
   pollInterval = setInterval(pollListeners, POLL_INTERVAL_MS);
-  endCheckInterval = setInterval(() => {
-    void checkLiveEndedByApi();
-  }, END_CHECK_INTERVAL_MS);
 
   pollListeners();
-  void checkLiveEndedByApi();
 
   // 💡 終了シグナルの受け取りを async に対応
   process.stdin.on("data", async (d) => {
@@ -398,7 +344,7 @@ async function startCollector() {
   });
   process.on("SIGTERM", async () => await saveAndExit());
 
-  const knownEventNames = new Set<string>(Object.values(EventName));
+  const knownEventNames = new Set<string>([...Object.values(EventName), ROOM_CLOSE_EVENT_NAME]);
   const unknownEventNames = new Set<string>();
 
   live.on("event:all", (eventName: any, payload: any, raw: any) => {
@@ -484,8 +430,10 @@ async function startCollector() {
     }
 
     // 💡 配信終了検知
-    if (eventName === EventName.LIVE_META_UPDATE && isFinishedMetaPayload(payload)) {
+    if (eName === ROOM_CLOSE_EVENT_NAME) {
+      // RoomClose(reason: EXPLICIT 等) は終了確定シグナルとして扱う
       void saveAndExit();
+      return;
     }
   });
 
