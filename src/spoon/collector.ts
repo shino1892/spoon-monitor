@@ -3,8 +3,10 @@ import fs from "fs";
 import path from "path";
 import "dotenv/config";
 import { Client } from "pg";
-import { EventName } from "./events";
+import { v2 } from "@sopia-bot/core";
 import { initSpoon } from "../app";
+
+const { EventName } = v2;
 
 const [, , liveIdRaw, liveStartTime, liveTitle, folderName] = process.argv;
 if (!liveIdRaw) process.exit(1);
