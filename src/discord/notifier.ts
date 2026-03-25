@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createDmChannel, postChannelMessage } from "./api";
 
 type NotifyMode = "channel" | "dm";
 
@@ -18,25 +19,8 @@ function getNotifyMode(): NotifyMode {
   return mode === "dm" ? "dm" : "channel";
 }
 
-async function discordApi<T>(path: string, init: RequestInit): Promise<T> {
-  const token = getBotToken();
-  const res = await fetch(`https://discord.com/api/v10${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bot ${token}`,
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Discord API error ${res.status}: ${text || res.statusText}`);
-  }
-  return (await res.json()) as T;
-}
-
 async function resolveTargetChannelId(): Promise<string> {
+  const token = getBotToken();
   const mode = getNotifyMode();
   if (mode === "channel") {
     const channelId = getEnv("DISCORD_CHANNEL_ID");
@@ -48,17 +32,11 @@ async function resolveTargetChannelId(): Promise<string> {
   if (!adminId) throw new Error("DISCORD_ADMIN_ID or ADMIN_ID is missing (dm mode)");
 
   // Create (or fetch) DM channel with admin
-  const dm = await discordApi<{ id: string }>("/users/@me/channels", {
-    method: "POST",
-    body: JSON.stringify({ recipient_id: adminId }),
-  });
-  return dm.id;
+  return createDmChannel(token, adminId);
 }
 
 export async function sendDiscordMessage(content: string) {
+  const token = getBotToken();
   const channelId = await resolveTargetChannelId();
-  await discordApi(`/channels/${channelId}/messages`, {
-    method: "POST",
-    body: JSON.stringify({ content }),
-  });
+  await postChannelMessage(token, channelId, content);
 }

@@ -4,8 +4,10 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteracti
 import fs from "fs";
 import path from "path";
 import { initSpoon } from "../app";
+import { createLogger, errorToMessage } from "../shared/logger";
 
-console.log("🚀 Starting Discord bot...");
+const log = createLogger("discord-bot");
+log.info("Starting Discord bot...");
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const ADMIN_ID = process.env.ADMIN_ID;
@@ -57,10 +59,10 @@ function createFolderName(liveId: number, title: string) {
 function startCollectorProcess(liveId: number, liveTitle: string) {
   if (collectorProc && !collectorProc.killed) {
     if (collectorLiveId === liveId) {
-      console.log(`ℹ️ collector はすでに liveId=${liveId} で起動中です。`);
+      log.info(`collector はすでに liveId=${liveId} で起動中です。`);
       return;
     }
-    console.log(`⚠️ 既存 collector(liveId=${collectorLiveId}) を停止して切り替えます。`);
+    log.warn(`既存 collector(liveId=${collectorLiveId}) を停止して切り替えます。`);
     collectorProc.stdin.write("exit\n");
   }
 
@@ -77,7 +79,7 @@ function startCollectorProcess(liveId: number, liveTitle: string) {
 
   collectorProc = child;
   collectorLiveId = liveId;
-  console.log(`🚀 collector を起動しました (liveId=${liveId}, folder=${folderName})`);
+  log.info(`collector を起動しました (liveId=${liveId}, folder=${folderName})`);
 
   child.stdout.on("data", (chunk) => {
     process.stdout.write(`[collector:${liveId}] ${chunk.toString()}`);
@@ -86,7 +88,7 @@ function startCollectorProcess(liveId: number, liveTitle: string) {
     process.stderr.write(`[collector:${liveId}:err] ${chunk.toString()}`);
   });
   child.on("close", (code, signal) => {
-    console.log(`🧹 collector 終了 (liveId=${liveId}, code=${code ?? "null"}, signal=${signal ?? "null"})`);
+    log.info(`collector 終了 (liveId=${liveId}, code=${code ?? "null"}, signal=${signal ?? "null"})`);
     if (collectorProc === child) {
       collectorProc = null;
       collectorLiveId = null;
@@ -99,7 +101,7 @@ async function stopCollectorProcess() {
 
   const proc = collectorProc;
   const liveId = collectorLiveId;
-  console.log(`🛑 collector 停止要求 (liveId=${liveId ?? "unknown"})`);
+  log.info(`collector 停止要求 (liveId=${liveId ?? "unknown"})`);
 
   await new Promise<void>((resolve) => {
     let done = false;
@@ -210,10 +212,10 @@ async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(token);
   if (guildId) {
     await rest.put(Routes.applicationGuildCommands(appId, guildId), { body: commands });
-    console.log(`✅ Slash commands registered (guild): ${guildId}`);
+    log.info(`Slash commands registered (guild): ${guildId}`);
   } else {
     await rest.put(Routes.applicationCommands(appId), { body: commands });
-    console.log("✅ Slash commands registered (global)");
+    log.info("Slash commands registered (global)");
   }
 }
 
@@ -384,18 +386,18 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 client.once("clientReady", async () => {
-  console.log(`✅ Ready as ${client.user?.tag ?? "(unknown)"}`);
+  log.info(`Ready as ${client.user?.tag ?? "(unknown)"}`);
   try {
     await registerCommands();
   } catch (e: any) {
-    console.error("❌ Slash command registration failed:", e?.message || e);
+    log.error("Slash command registration failed", errorToMessage(e));
   }
 });
 
 client
   .login(process.env.DISCORD_BOT_TOKEN)
-  .then(() => console.log("🔐 login() resolved"))
-  .catch((e) => console.error("❌ login() failed:", e?.message || e));
+  .then(() => log.info("login() resolved"))
+  .catch((e) => log.error("login() failed", errorToMessage(e)));
 
 process.on("SIGINT", () => {
   void stopCollectorProcess().finally(() => process.exit(0));
