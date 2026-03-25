@@ -1,3 +1,5 @@
+import { buildEntryAutoReply, buildJoinLogMessage, buildLeaveLogMessage, buildReJoinLogMessage, EntryCategory } from "./messages";
+
 export interface UserActivity {
   userId: number;
   nickname: string;
@@ -13,6 +15,7 @@ export interface UserActivity {
 export interface CollectorState {
   userStats: Map<number, UserActivity>;
   currentListeners: Set<number>;
+  allTimeSeenUserIds: Set<number>;
   totalLikes: number;
 }
 
@@ -33,19 +36,21 @@ function resolveUserId(user: RawUser): number | null {
   return n;
 }
 
-export function createCollectorState(): CollectorState {
+export function createCollectorState(allTimeSeenUserIds: Iterable<number> = []): CollectorState {
   return {
     userStats: new Map<number, UserActivity>(),
     currentListeners: new Set<number>(),
+    allTimeSeenUserIds: new Set<number>(allTimeSeenUserIds),
     totalLikes: 0,
   };
 }
 
-export function handleEntry(state: CollectorState, user: RawUser, nowISO: string): { userId: number; stats: UserActivity; joinMessage?: string; reJoinMessage?: string } | null {
+export function handleEntry(state: CollectorState, user: RawUser, nowISO: string): { userId: number; stats: UserActivity; joinMessage?: string; reJoinMessage?: string; entryAutoReplyMessage?: string } | null {
   const userId = resolveUserId(user);
   if (userId === null) return null;
 
   if (!state.userStats.has(userId)) {
+    const hasVisitedAnyLiveBefore = state.allTimeSeenUserIds.has(userId);
     const stats: UserActivity = {
       userId,
       nickname: user.nickname || "リスナー",
@@ -59,28 +64,37 @@ export function handleEntry(state: CollectorState, user: RawUser, nowISO: string
     };
     state.userStats.set(userId, stats);
     state.currentListeners.add(userId);
+    state.allTimeSeenUserIds.add(userId);
+
+    const category: EntryCategory = hasVisitedAnyLiveBefore ? "first-in-live" : "first-ever";
     return {
       userId,
       stats,
-      joinMessage: `[Join] ${stats.nickname} (初回入室)`,
+      joinMessage: buildJoinLogMessage(stats.nickname),
+      entryAutoReplyMessage: buildEntryAutoReply(stats.nickname, category),
     };
   }
 
   const stats = state.userStats.get(userId)!;
   let reJoinMessage: string | undefined;
+  let entryAutoReplyMessage: string | undefined;
   if (!state.currentListeners.has(userId)) {
     stats.entryCount++;
     stats.lastSeen = nowISO;
-    reJoinMessage = `[Re-join] ${stats.nickname} (累計: ${stats.entryCount}回)`;
+    reJoinMessage = buildReJoinLogMessage(stats.nickname, stats.entryCount);
+    if (stats.entryCount === 2) {
+      entryAutoReplyMessage = buildEntryAutoReply(stats.nickname, "second-entry");
+    }
   }
 
   state.currentListeners.add(userId);
-  return { userId, stats, reJoinMessage };
+  return { userId, stats, reJoinMessage, entryAutoReplyMessage };
 }
 
-export function applyPollingSnapshot(state: CollectorState, latestListeners: RawUser[], nowISO: string, pollIntervalMs: number): string[] {
+export function applyPollingSnapshot(state: CollectorState, latestListeners: RawUser[], nowISO: string, pollIntervalMs: number): { messages: string[]; entryAutoReplyMessages: string[] } {
   const latestIds = new Set<number>();
   const messages: string[] = [];
+  const entryAutoReplyMessages: string[] = [];
 
   latestListeners.forEach((user) => {
     const entryResult = handleEntry(state, user, nowISO);
@@ -88,6 +102,7 @@ export function applyPollingSnapshot(state: CollectorState, latestListeners: Raw
 
     if (entryResult.joinMessage) messages.push(entryResult.joinMessage);
     if (entryResult.reJoinMessage) messages.push(entryResult.reJoinMessage);
+    if (entryResult.entryAutoReplyMessage) entryAutoReplyMessages.push(entryResult.entryAutoReplyMessage);
 
     latestIds.add(entryResult.userId);
     entryResult.stats.staySeconds += pollIntervalMs / 1000;
@@ -100,12 +115,12 @@ export function applyPollingSnapshot(state: CollectorState, latestListeners: Raw
   state.currentListeners.forEach((id) => {
     if (!latestIds.has(id)) {
       const stats = state.userStats.get(id);
-      messages.push(`[Leave] ${stats?.nickname || id} が退室しました`);
+      messages.push(buildLeaveLogMessage(stats?.nickname || id));
     }
   });
 
   state.currentListeners = latestIds;
-  return messages;
+  return { messages, entryAutoReplyMessages };
 }
 
 export function addChat(stats: UserActivity) {

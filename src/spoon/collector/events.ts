@@ -1,5 +1,6 @@
 import { v2 } from "@sopia-bot/core";
 import { CollectorState, UserActivity, addChat, addDonation, addLike, handleEntry } from "./state";
+import { buildChatMetricLogMessage, buildDonationMetricLogMessage, buildLikeAutoReply, buildLikeMetricLogMessage } from "./messages";
 
 const { EventName } = v2;
 
@@ -19,6 +20,7 @@ export interface ApplyEventResult {
   stats?: UserActivity;
   likeCount?: number;
   entryMessages: string[];
+  entryAutoReplyMessages: string[];
   metricLogMessage?: string;
 }
 
@@ -47,12 +49,14 @@ export function isLikeEvent(eName: string) {
 
 export function applyEventToState(state: CollectorState, event: ParsedCollectorEvent, nowISO: string, toPositiveInt: (value: unknown, fallback?: number) => number): ApplyEventResult {
   const entryMessages: string[] = [];
+  const entryAutoReplyMessages: string[] = [];
   let stats: UserActivity | undefined;
 
   if (event.userId !== undefined && Number.isFinite(event.userId)) {
     const entryResult = handleEntry(state, event.gen, nowISO);
     if (entryResult?.joinMessage) entryMessages.push(entryResult.joinMessage);
     if (entryResult?.reJoinMessage) entryMessages.push(entryResult.reJoinMessage);
+    if (entryResult?.entryAutoReplyMessage) entryAutoReplyMessages.push(entryResult.entryAutoReplyMessage);
 
     stats = state.userStats.get(event.userId);
     if (stats) stats.lastSeen = nowISO;
@@ -63,7 +67,8 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
     return {
       stats,
       entryMessages,
-      metricLogMessage: `「${event.payload.message}」を受信しました。`,
+      entryAutoReplyMessages,
+      metricLogMessage: buildChatMetricLogMessage(event.payload.message),
     };
   }
 
@@ -74,7 +79,8 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
       stats,
       likeCount,
       entryMessages,
-      metricLogMessage: `ハート数：${likeCount}`,
+      entryAutoReplyMessages,
+      metricLogMessage: buildLikeMetricLogMessage(likeCount),
     };
   }
 
@@ -84,16 +90,14 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
     return {
       stats,
       entryMessages,
-      metricLogMessage: `${amount}スプーンをもらいました。`,
+      entryAutoReplyMessages,
+      metricLogMessage: buildDonationMetricLogMessage(amount),
     };
   }
 
-  return { stats, entryMessages };
+  return { stats, entryMessages, entryAutoReplyMessages };
 }
 
 export function createLikeAutoReply(nickname: string, likeCount: number) {
-  const namePrefix = `${nickname}さん\n`;
-  if (likeCount === 1) return `${namePrefix}ハートありがとう！`;
-  if (likeCount < 10) return `${namePrefix}ミニバスターありがとう！`;
-  return `${namePrefix}バスターありがとう！`;
+  return buildLikeAutoReply(nickname, likeCount);
 }

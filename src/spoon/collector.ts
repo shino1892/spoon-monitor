@@ -4,7 +4,7 @@ import { initSpoon } from "../app";
 import { loadCollectorConfig } from "./collector/config";
 import { applyPollingSnapshot, createCollectorState } from "./collector/state";
 import { applyEventToState, createLikeAutoReply, isLikeEvent, parseCollectorEvent, ROOM_CLOSE_EVENT_NAME } from "./collector/events";
-import { connectDb, createDbClient, sendDiscordMessage } from "./collector/infra";
+import { connectDb, createDbClient, loadKnownUserIds, sendDiscordMessage } from "./collector/infra";
 import { createSaveAndExitHandler } from "./collector/shutdown";
 import { createLogger, errorToMessage } from "../shared/logger";
 
@@ -70,8 +70,9 @@ function toPositiveInt(value: unknown, fallback = 1) {
 async function setupClients() {
   const djClient = await initSpoon("DJ");
   isDbConnected = await connectDb(db);
+  const knownUserIds = await loadKnownUserIds(db, isDbConnected);
 
-  return djClient;
+  return { djClient, knownUserIds };
 }
 
 async function startCollector() {
@@ -79,10 +80,10 @@ async function startCollector() {
   log.info(startupLog);
   await sendDiscordMessage(DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, startupLog);
 
-  const client = await setupClients();
+  const { djClient: client, knownUserIds } = await setupClients();
 
   const live = client.live;
-  const state = createCollectorState();
+  const state = createCollectorState(knownUserIds);
   let pollInterval: NodeJS.Timeout | undefined;
 
   const pollListeners = async () => {
@@ -91,10 +92,13 @@ async function startCollector() {
       const latestListeners = data.results || [];
       const nowISO = new Date().toISOString();
 
-      const pollMessages = applyPollingSnapshot(state, latestListeners, nowISO, POLL_INTERVAL_MS);
-      pollMessages.forEach((message) => {
+      const pollResult = applyPollingSnapshot(state, latestListeners, nowISO, POLL_INTERVAL_MS);
+      pollResult.messages.forEach((message) => {
         log.info(message);
         void sendDiscordMessage(DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, message);
+      });
+      pollResult.entryAutoReplyMessages.forEach((message) => {
+        live.message(message).catch((err) => log.error("入室メッセージ送信失敗", errorToMessage(err)));
       });
     } catch (e: any) {
       log.error("Polling Error", errorToMessage(e));
@@ -154,6 +158,9 @@ async function startCollector() {
     result.entryMessages.forEach((message) => {
       log.info(message);
       void sendDiscordMessage(DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, message);
+    });
+    result.entryAutoReplyMessages.forEach((message) => {
+      live.message(message).catch((err) => log.error("入室メッセージ送信失敗", errorToMessage(err)));
     });
 
     if (event.userId !== undefined) {

@@ -63,6 +63,71 @@ export async function sendDiscordMessage(token: string | undefined, channelId: s
   }
 }
 
+function toFiniteUserId(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+export async function loadKnownUserIdsFromDb(db: Client): Promise<Set<number>> {
+  const res = await db.query("SELECT DISTINCT user_id FROM listener_activities");
+  const ids = new Set<number>();
+  for (const row of res.rows) {
+    const id = toFiniteUserId(row.user_id);
+    if (id !== null) ids.add(id);
+  }
+  return ids;
+}
+
+export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(), "data")): Set<number> {
+  const ids = new Set<number>();
+  if (!fs.existsSync(dataDir)) return ids;
+
+  const folders = fs
+    .readdirSync(dataDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+
+  for (const folder of folders) {
+    const p = path.join(dataDir, folder, "summary.json");
+    if (!fs.existsSync(p)) continue;
+
+    try {
+      const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+      const users = raw?.users;
+      if (!users || typeof users !== "object") continue;
+
+      for (const key of Object.keys(users as Record<string, unknown>)) {
+        const id = toFiniteUserId(key);
+        if (id !== null) ids.add(id);
+      }
+    } catch (e: any) {
+      log.warn(`summary.json 読み込み失敗: ${p} (${errorToMessage(e)})`);
+    }
+  }
+
+  return ids;
+}
+
+export async function loadKnownUserIds(db: Client | null, isDbConnected: boolean): Promise<Set<number>> {
+  if (!db || !isDbConnected) {
+    const ids = loadKnownUserIdsFromSummaryJson();
+    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件)`);
+    return ids;
+  }
+
+  try {
+    const ids = await loadKnownUserIdsFromDb(db);
+    log.info(`既知ユーザー読込: DB (${ids.size}件)`);
+    return ids;
+  } catch (e: any) {
+    log.warn(`既知ユーザーのDB読込に失敗。JSONへフォールバック (${errorToMessage(e)})`);
+    const ids = loadKnownUserIdsFromSummaryJson();
+    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件)`);
+    return ids;
+  }
+}
+
 export function saveSummaryJson(folderName: string, finalReport: unknown) {
   const dataDir = path.join(process.cwd(), "data", folderName);
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
