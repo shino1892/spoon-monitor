@@ -10,5 +10,16 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "refresh-listener-temperatures",
+      script: "pnpm",
+      args: "tsx src/jobs/refresh-listener-temperatures.ts",
+      cron_restart: "0 4 * * *",
+      autorestart: false,
+      watch: false,
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };
