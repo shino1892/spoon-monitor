@@ -1,5 +1,23 @@
-import type { ILogger } from './logger.interface'
-import { LogLevel } from './logger.interface'
+import type { ILogger } from "./logger.interface";
+import { LogLevel } from "./logger.interface";
+
+const LOG_TIME_ZONE = process.env.LOG_TIME_ZONE || "Asia/Tokyo";
+const TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: LOG_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  fractionalSecondDigits: 3,
+  hourCycle: "h23",
+});
+
+function formatTimestamp(date: Date = new Date()): string {
+  const localTs = TIMESTAMP_FORMATTER.format(date).replace(" ", "T");
+  return `${localTs} ${LOG_TIME_ZONE}`;
+}
 
 /**
  * 콘솔 기반 Logger 구현체
@@ -10,39 +28,39 @@ import { LogLevel } from './logger.interface'
 export class ConsoleLogger implements ILogger {
   constructor(
     private minLevel: LogLevel = LogLevel.DEBUG,
-    private prefix: string = '[SOPIA]'
+    private prefix: string = "[SOPIA]",
   ) {}
 
   private shouldLog(level: LogLevel): boolean {
-    return level >= this.minLevel
+    return level >= this.minLevel;
   }
 
   private formatMessage(level: string, message: string): string {
-    const timestamp = new Date().toISOString()
-    return `${this.prefix} [${timestamp}] [${level}] ${message}`
+    const timestamp = formatTimestamp();
+    return `${this.prefix} [${timestamp}] [${level}] ${message}`;
   }
 
   debug(message: string, ...args: any[]): void {
     if (this.shouldLog(LogLevel.DEBUG)) {
-      console.debug(this.formatMessage('DEBUG', message), ...args)
+      console.debug(this.formatMessage("DEBUG", message), ...args);
     }
   }
 
   info(message: string, ...args: any[]): void {
     if (this.shouldLog(LogLevel.INFO)) {
-      console.info(this.formatMessage('INFO', message), ...args)
+      console.info(this.formatMessage("INFO", message), ...args);
     }
   }
 
   warn(message: string, ...args: any[]): void {
     if (this.shouldLog(LogLevel.WARN)) {
-      console.warn(this.formatMessage('WARN', message), ...args)
+      console.warn(this.formatMessage("WARN", message), ...args);
     }
   }
 
   error(message: string, error?: Error | any, ...args: any[]): void {
     if (this.shouldLog(LogLevel.ERROR)) {
-      console.error(this.formatMessage('ERROR', message), error, ...args)
+      console.error(this.formatMessage("ERROR", message), error, ...args);
     }
   }
 }

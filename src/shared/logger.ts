@@ -16,9 +16,26 @@ function resolveLogLevel(raw: string | undefined): LogLevel {
 }
 
 const ACTIVE_LEVEL = resolveLogLevel(process.env.LOG_LEVEL);
+const LOG_TIME_ZONE = process.env.LOG_TIME_ZONE || "Asia/Tokyo";
+const TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: LOG_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  fractionalSecondDigits: 3,
+  hourCycle: "h23",
+});
 
 function shouldLog(level: LogLevel) {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[ACTIVE_LEVEL];
+}
+
+function formatTimestamp(date: Date = new Date()) {
+  const localTs = TIMESTAMP_FORMATTER.format(date).replace(" ", "T");
+  return `${localTs} ${LOG_TIME_ZONE}`;
 }
 
 function formatMeta(meta: unknown) {
@@ -35,7 +52,7 @@ function formatMeta(meta: unknown) {
 }
 
 function formatLine(level: LogLevel, scope: string, message: string, meta?: unknown) {
-  const ts = new Date().toISOString();
+  const ts = formatTimestamp();
   const upper = level.toUpperCase();
   return `[${ts}] [${upper}] [${scope}] ${message}${formatMeta(meta)}`;
 }
