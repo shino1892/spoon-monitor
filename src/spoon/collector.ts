@@ -1,4 +1,6 @@
 import "dotenv/config";
+import fs from "fs";
+import path from "path";
 import { v2 } from "@sopia-bot/core";
 import { initSpoon } from "../app";
 import { loadCollectorConfig } from "./collector/config";
@@ -58,6 +60,19 @@ function dumpJson(label: string, value: unknown) {
   const sanitized = sanitizeForLog(value);
   const json = JSON.stringify(sanitized, null, 2);
   log.debug(`${label}:\n${truncateForLog(json, DEBUG_SPOON_MAX_CHARS)}`);
+}
+
+function saveUnknownEventPayload(folderName: string, eventName: string, payload: unknown) {
+  const dataDir = path.join(process.cwd(), "data", folderName);
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+  const filePath = path.join(dataDir, "unknown-events.jsonl");
+  const line = JSON.stringify({
+    detectedAt: new Date().toISOString(),
+    eventName,
+    payload: sanitizeForLog(payload),
+  });
+  fs.appendFileSync(filePath, `${line}\n`);
 }
 
 function toPositiveInt(value: unknown, fallback = 1) {
@@ -132,6 +147,7 @@ async function startCollector() {
   live.on("event:all", (eventName: any, payload: any, raw: any) => {
     const nowISO = new Date().toISOString();
     const event = parseCollectorEvent(eventName, payload, raw, DJ_ID);
+    const isUnknownEvent = !knownEventNames.has(event.eName);
 
     if (DEBUG_SPOON_EVENTS) {
       log.debug(`[event] ${event.eName} userId=${event.userId ?? "(none)"} nick=${event.nickname} self=${event.isSelf}`);
@@ -141,7 +157,15 @@ async function startCollector() {
       dumpJson(`[raw] ${event.eName}`, event.raw);
     }
 
-    if (DEBUG_SPOON_UNKNOWN_EVENTS && !knownEventNames.has(event.eName) && !unknownEventNames.has(event.eName)) {
+    if (DEBUG_SPOON_EVENTS && isUnknownEvent) {
+      try {
+        saveUnknownEventPayload(folderName, event.eName, event.payload);
+      } catch (e: any) {
+        log.error("未知イベント payload 保存失敗", errorToMessage(e));
+      }
+    }
+
+    if (DEBUG_SPOON_UNKNOWN_EVENTS && isUnknownEvent && !unknownEventNames.has(event.eName)) {
       unknownEventNames.add(event.eName);
       log.warn(`未対応イベント検知: ${event.eName}`);
       if (DEBUG_SPOON_PAYLOAD) {
