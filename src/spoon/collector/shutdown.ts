@@ -44,6 +44,7 @@ function buildSummaryForDb(liveId: number, liveTitle: string, durationMinutes: n
 
 export function createSaveAndExitHandler(params: CreateSaveAndExitHandlerParams) {
   let isShuttingDown = false;
+  let hasError = false;
 
   return async () => {
     if (isShuttingDown) return;
@@ -73,12 +74,13 @@ export function createSaveAndExitHandler(params: CreateSaveAndExitHandlerParams)
         log.warn("DB未接続のため、DB保存をスキップします。");
       }
     } catch (e: any) {
+      hasError = true;
       const message = `❌ 終了保存エラー: ${e?.message || e}`;
       log.error("終了保存エラー", errorToMessage(e));
       await sendDiscordMessage(params.discordBotToken, params.discordChannelId, message);
     } finally {
       await closeDb(params.db);
-      process.exit(0);
+      process.exit(hasError ? 1 : 0);
     }
   };
 }

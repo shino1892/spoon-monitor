@@ -258,4 +258,9 @@ async function startCollector() {
   }
 }
 
-startCollector();
+void startCollector().catch(async (err) => {
+  const message = `❌ collector 起動失敗: ${errorToMessage(err)}`;
+  log.error("collector 起動失敗", errorToMessage(err));
+  await sendDiscordMessage(DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, message);
+  process.exit(1);
+});
