@@ -1,11 +1,12 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
+import readline from "readline";
 import { v2 } from "@sopia-bot/core";
 import { initSpoon } from "../app";
 import { loadCollectorConfig } from "./collector/config";
 import { applyPollingSnapshot, createCollectorState } from "./collector/state";
-import { applyEventToState, createLikeAutoReply, isLikeEvent, parseCollectorEvent, ROOM_CLOSE_EVENT_NAME } from "./collector/events";
+import { applyEventToState, createLikeAutoReply, isLikeEvent, NOOP_HANDLED_EVENT_NAMES, parseCollectorEvent, ROOM_CLOSE_EVENT_NAME } from "./collector/events";
 import { connectDb, createDbClient, loadKnownUserIds, sendDiscordMessage } from "./collector/infra";
 import { createSaveAndExitHandler } from "./collector/shutdown";
 import { createLogger, errorToMessage } from "../shared/logger";
@@ -135,13 +136,36 @@ async function startCollector() {
     discordChannelId: DISCORD_CHANNEL_ID,
   });
 
+  const commandReader = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
+
+  commandReader.on("line", (line) => {
+    const command = line.trim().toLowerCase();
+    if (command !== "exit") return;
+
+    log.info("終了コマンドを受信したため、集計保存して終了します。");
+    void saveAndExit();
+  });
+
+  process.on("SIGINT", () => {
+    log.info("SIGINT を受信したため、集計保存して終了します。");
+    void saveAndExit();
+  });
+
+  process.on("SIGTERM", () => {
+    log.info("SIGTERM を受信したため、集計保存して終了します。");
+    void saveAndExit();
+  });
+
   pollInterval = setInterval(pollListeners, POLL_INTERVAL_MS);
 
   pollListeners();
 
   // 終了判定は RoomClose イベントのみで行う。
 
-  const knownEventNames = new Set<string>([...Object.values(EventName), ROOM_CLOSE_EVENT_NAME]);
+  const knownEventNames = new Set<string>([...Object.values(EventName), ROOM_CLOSE_EVENT_NAME, ...NOOP_HANDLED_EVENT_NAMES]);
   const unknownEventNames = new Set<string>();
 
   live.on("event:all", (eventName: any, payload: any, raw: any) => {

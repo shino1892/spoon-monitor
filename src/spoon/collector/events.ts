@@ -5,6 +5,7 @@ import { buildChatMetricLogMessage, buildDonationMetricLogMessage, buildLikeAuto
 const { EventName } = v2;
 
 export const ROOM_CLOSE_EVENT_NAME = "RoomClose";
+export const NOOP_HANDLED_EVENT_NAMES = ["LivePlayMailboxStart", "LivePlayMailboxUpdate", "LivePlayMailbox", "LivePlayMailboxEnd", "LivePlayPollStart", "LivePlayPollUpdate", "LivePlayPollEnd"] as const;
 
 export interface ParsedCollectorEvent {
   eName: string;
@@ -51,6 +52,11 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
   const entryMessages: string[] = [];
   const entryAutoReplyMessages: string[] = [];
   let stats: UserActivity | undefined;
+
+  // Mailbox/Poll 系イベントは現在は観測のみ（将来ここに処理を追加する）
+  if (NOOP_HANDLED_EVENT_NAMES.includes(event.eName as (typeof NOOP_HANDLED_EVENT_NAMES)[number])) {
+    return { stats, entryMessages, entryAutoReplyMessages };
+  }
 
   if (event.userId !== undefined && Number.isFinite(event.userId)) {
     const entryResult = handleEntry(state, event.gen, nowISO);
