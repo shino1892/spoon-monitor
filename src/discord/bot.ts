@@ -16,6 +16,7 @@ const CHECK_WINDOW_MS = 30_000;
 const CHECK_INTERVAL_MS = 2_000;
 let isChecking = false;
 let djClient: Awaited<ReturnType<typeof initSpoon>> | null = null;
+let monitorClient: Awaited<ReturnType<typeof initSpoon>> | null = null;
 let collectorProc: ChildProcessWithoutNullStreams | null = null;
 let collectorLiveId: number | null = null;
 
@@ -32,6 +33,13 @@ async function getDjClient() {
     djClient = await initSpoon("DJ");
   }
   return djClient;
+}
+
+async function getMonitorClient() {
+  if (!monitorClient) {
+    monitorClient = await initSpoon("MONITOR");
+  }
+  return monitorClient;
 }
 
 function createJoinButtonRow(liveId: string | number) {
@@ -128,7 +136,7 @@ async function stopCollectorProcess() {
 }
 
 async function burstCheckLiveOnceForWindow(djId: string) {
-  const monitorClient = await initSpoon("MONITOR");
+  const monitorClient = await getMonitorClient();
   const deadline = Date.now() + CHECK_WINDOW_MS;
   while (Date.now() < deadline) {
     const data = await monitorClient.api.live.getSubscribed({ page_size: 50, page: 1 });
@@ -283,12 +291,18 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
   }
 
   if (name === "join") {
+    if (isChecking) {
+      await interaction.reply({ content: "⏳ すでに配信チェック中です。少し待ってから再実行してください。", ephemeral: true });
+      return;
+    }
+
     const djId = process.env.DJ_ID;
     if (!djId) {
       await interaction.reply({ content: "⚠️ DJ_ID が未設定です。", ephemeral: true });
       return;
     }
 
+    isChecking = true;
     await interaction.deferReply({ ephemeral: true });
     try {
       const live = await burstCheckLiveOnceForWindow(djId);
@@ -313,6 +327,8 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
       });
     } catch (e: any) {
       await interaction.editReply(`❌ 参加失敗: ${e?.message || e}`);
+    } finally {
+      isChecking = false;
     }
     return;
   }

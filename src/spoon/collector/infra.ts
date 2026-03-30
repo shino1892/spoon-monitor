@@ -79,7 +79,7 @@ export async function loadKnownUserIdsFromDb(db: Client): Promise<Set<number>> {
   return ids;
 }
 
-export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(), "data")): Set<number> {
+export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(), "data"), maxFolders = 30): Set<number> {
   const ids = new Set<number>();
   if (!fs.existsSync(dataDir)) return ids;
 
@@ -88,9 +88,19 @@ export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
 
-  for (const folder of folders) {
-    const p = path.join(dataDir, folder, "summary.json");
-    if (!fs.existsSync(p)) continue;
+  const latestFolders = folders
+    .map((folder) => {
+      const summaryPath = path.join(dataDir, folder, "summary.json");
+      if (!fs.existsSync(summaryPath)) return null;
+      const mtimeMs = fs.statSync(summaryPath).mtimeMs;
+      return { folder, summaryPath, mtimeMs };
+    })
+    .filter((v): v is { folder: string; summaryPath: string; mtimeMs: number } => !!v)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, Math.max(1, maxFolders));
+
+  for (const item of latestFolders) {
+    const p = item.summaryPath;
 
     try {
       const raw = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -112,7 +122,7 @@ export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(
 export async function loadKnownUserIds(db: Client | null, isDbConnected: boolean): Promise<Set<number>> {
   if (!db || !isDbConnected) {
     const ids = loadKnownUserIdsFromSummaryJson();
-    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件)`);
+    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件, latest ${30} folders)`);
     return ids;
   }
 
@@ -123,7 +133,7 @@ export async function loadKnownUserIds(db: Client | null, isDbConnected: boolean
   } catch (e: any) {
     log.warn(`既知ユーザーのDB読込に失敗。JSONへフォールバック (${errorToMessage(e)})`);
     const ids = loadKnownUserIdsFromSummaryJson();
-    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件)`);
+    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件, latest ${30} folders)`);
     return ids;
   }
 }
@@ -156,16 +166,27 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
 
     log.info(`リスナー ${summary.userStats.size} 名の活動記録を保存中...`);
 
-    for (const [userId, stats] of summary.userStats) {
+    const listenerRows = Array.from(summary.userStats.entries());
+    const batchSize = 200;
+    for (let offset = 0; offset < listenerRows.length; offset += batchSize) {
+      const chunk = listenerRows.slice(offset, offset + batchSize);
+      const values: Array<number | string> = [];
+      const placeholders = chunk
+        .map(([userId, stats], index) => {
+          const base = index * 10;
+          values.push(reportId as number, userId, stats.nickname, Math.floor(stats.staySeconds), stats.entryCount, stats.counts.chat, stats.counts.heart, stats.counts.spoon, stats.firstSeen, stats.lastSeen);
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
+        })
+        .join(",\n");
+
       const listenerQuery = `
         INSERT INTO listener_activities (
           report_id, user_id, nickname, stay_seconds, entry_count,
           chat_count, heart_count, spoon_count, first_seen, last_seen
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+        VALUES ${placeholders};
       `;
-      const listenerValues = [reportId, userId, stats.nickname, Math.floor(stats.staySeconds), stats.entryCount, stats.counts.chat, stats.counts.heart, stats.counts.spoon, stats.firstSeen, stats.lastSeen];
-      await db.query(listenerQuery, listenerValues);
+      await db.query(listenerQuery, values);
     }
 
     await db.query("COMMIT");

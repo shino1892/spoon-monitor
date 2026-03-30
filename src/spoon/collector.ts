@@ -63,9 +63,9 @@ function dumpJson(label: string, value: unknown) {
   log.debug(`${label}:\n${truncateForLog(json, DEBUG_SPOON_MAX_CHARS)}`);
 }
 
-function saveUnknownEventPayload(folderName: string, eventName: string, payload: unknown) {
+async function saveUnknownEventPayload(folderName: string, eventName: string, payload: unknown) {
   const dataDir = path.join(process.cwd(), "data", folderName);
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  await fs.promises.mkdir(dataDir, { recursive: true });
 
   const filePath = path.join(dataDir, "unknown-events.jsonl");
   const line = JSON.stringify({
@@ -73,7 +73,7 @@ function saveUnknownEventPayload(folderName: string, eventName: string, payload:
     eventName,
     payload: sanitizeForLog(payload),
   });
-  fs.appendFileSync(filePath, `${line}\n`);
+  await fs.promises.appendFile(filePath, `${line}\n`, "utf8");
 }
 
 function toPositiveInt(value: unknown, fallback = 1) {
@@ -182,11 +182,9 @@ async function startCollector() {
     }
 
     if (DEBUG_SPOON_EVENTS && isUnknownEvent) {
-      try {
-        saveUnknownEventPayload(folderName, event.eName, event.payload);
-      } catch (e: any) {
+      void saveUnknownEventPayload(folderName, event.eName, event.payload).catch((e: any) => {
         log.error("未知イベント payload 保存失敗", errorToMessage(e));
-      }
+      });
     }
 
     if (DEBUG_SPOON_UNKNOWN_EVENTS && isUnknownEvent && !unknownEventNames.has(event.eName)) {
