@@ -19,6 +19,10 @@ export interface CollectorState {
   totalLikes: number;
 }
 
+interface HandleEntryOptions {
+  forceRejoin?: boolean;
+}
+
 interface RawUser {
   id?: number;
   userId?: number;
@@ -45,11 +49,12 @@ export function createCollectorState(allTimeSeenUserIds: Iterable<number> = []):
   };
 }
 
-export function handleEntry(state: CollectorState, user: RawUser, nowISO: string): { userId: number; stats: UserActivity; joinMessage?: string; reJoinMessage?: string; entryAutoReplyMessage?: string } | null {
+export function handleEntry(state: CollectorState, user: RawUser, nowISO: string, options: HandleEntryOptions = {}): { userId: number; stats: UserActivity; joinMessage?: string; leaveMessage?: string; reJoinMessage?: string; entryAutoReplyMessage?: string } | null {
   const userId = resolveUserId(user);
   if (userId === null) return null;
 
   if (!state.userStats.has(userId)) {
+    // この配信中で初登場のユーザーを初期化する。
     const hasVisitedAnyLiveBefore = state.allTimeSeenUserIds.has(userId);
     const stats: UserActivity = {
       userId,
@@ -76,9 +81,16 @@ export function handleEntry(state: CollectorState, user: RawUser, nowISO: string
   }
 
   const stats = state.userStats.get(userId)!;
+  const shouldForceRejoin = options.forceRejoin === true;
   let reJoinMessage: string | undefined;
+  let leaveMessage: string | undefined;
   let entryAutoReplyMessage: string | undefined;
-  if (!state.currentListeners.has(userId)) {
+  if (!state.currentListeners.has(userId) || shouldForceRejoin) {
+    // 直前スナップショットに不在だった場合は再入室として扱う。
+    if (shouldForceRejoin && state.currentListeners.has(userId)) {
+      // ポーリング間の退室見逃しを、明示的な入室イベントで補完する。
+      leaveMessage = buildLeaveLogMessage(stats.nickname || userId);
+    }
     stats.entryCount++;
     stats.lastSeen = nowISO;
     reJoinMessage = buildReJoinLogMessage(stats.nickname, stats.entryCount);
@@ -88,7 +100,7 @@ export function handleEntry(state: CollectorState, user: RawUser, nowISO: string
   }
 
   state.currentListeners.add(userId);
-  return { userId, stats, reJoinMessage, entryAutoReplyMessage };
+  return { userId, stats, leaveMessage, reJoinMessage, entryAutoReplyMessage };
 }
 
 export function applyPollingSnapshot(state: CollectorState, latestListeners: RawUser[], nowISO: string, pollIntervalMs: number): { messages: string[]; entryAutoReplyMessages: string[] } {
@@ -101,6 +113,7 @@ export function applyPollingSnapshot(state: CollectorState, latestListeners: Raw
     if (!entryResult) return;
 
     if (entryResult.joinMessage) messages.push(entryResult.joinMessage);
+    if (entryResult.leaveMessage) messages.push(entryResult.leaveMessage);
     if (entryResult.reJoinMessage) messages.push(entryResult.reJoinMessage);
     if (entryResult.entryAutoReplyMessage) entryAutoReplyMessages.push(entryResult.entryAutoReplyMessage);
 
@@ -113,6 +126,7 @@ export function applyPollingSnapshot(state: CollectorState, latestListeners: Raw
   });
 
   state.currentListeners.forEach((id) => {
+    // 最新一覧から消えたユーザーは退室ログを作成する。
     if (!latestIds.has(id)) {
       const stats = state.userStats.get(id);
       messages.push(buildLeaveLogMessage(stats?.nickname || id));

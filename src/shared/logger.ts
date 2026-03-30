@@ -12,6 +12,7 @@ function resolveLogLevel(raw: string | undefined): LogLevel {
   if (normalized === "debug" || normalized === "info" || normalized === "warn" || normalized === "error") {
     return normalized;
   }
+  // 想定外の値は info に丸めてログ欠落を防ぐ。
   return "info";
 }
 
@@ -30,6 +31,7 @@ const TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("sv-SE", {
 });
 
 function shouldLog(level: LogLevel) {
+  // しきい値以上のレベルのみ出力する。
   return LEVEL_ORDER[level] >= LEVEL_ORDER[ACTIVE_LEVEL];
 }
 
@@ -45,6 +47,7 @@ function formatMeta(meta: unknown) {
   }
   if (typeof meta === "string") return ` | ${meta}`;
   try {
+    // 任意オブジェクトは JSON 化して 1 行に収める。
     return ` | ${JSON.stringify(meta)}`;
   } catch {
     return " | [unserializable-meta]";

@@ -9,11 +9,13 @@ export async function discordApiWithToken<T>(token: string, path: string, init: 
   });
 
   if (!res.ok) {
+    // エラーレスポンス本文が取れるときは原因をそのまま投げる。
     const text = await res.text().catch(() => "");
     throw new Error(`Discord API error ${res.status}: ${text || res.statusText}`);
   }
 
   if (res.status === 204) {
+    // Discord の No Content 応答は body がないため undefined を返す。
     return undefined as T;
   }
 

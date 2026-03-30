@@ -70,6 +70,7 @@ function startCollectorProcess(liveId: number, liveTitle: string) {
       log.info(`collector はすでに liveId=${liveId} で起動中です。`);
       return;
     }
+    // 別ライブ収集中なら明示終了を送ってから切り替える。
     log.warn(`既存 collector(liveId=${collectorLiveId}) を停止して切り替えます。`);
     collectorProc.stdin.write("exit\n");
   }
@@ -120,6 +121,7 @@ async function stopCollectorProcess() {
     };
 
     const timer = setTimeout(() => {
+      // 通常終了が間に合わない場合はシグナルで強制停止する。
       if (!proc.killed) {
         proc.kill("SIGTERM");
       }
@@ -139,6 +141,7 @@ async function burstCheckLiveOnceForWindow(djId: string) {
   const monitorClient = await getMonitorClient();
   const deadline = Date.now() + CHECK_WINDOW_MS;
   while (Date.now() < deadline) {
+    // 短い間隔で購読一覧を再取得し、配信開始直後も拾えるようにする。
     const data = await monitorClient.api.live.getSubscribed({ page_size: 50, page: 1 });
     const liveList = data.results || [];
     const myLive = liveList.find((l: any) => l?.author?.id?.toString?.() === djId);
@@ -248,6 +251,7 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
     }
 
     isChecking = true;
+    // タイムアウト付き検知はレスポンスが遅くなるため defer しておく。
     await interaction.deferReply({ ephemeral: true });
     try {
       const live = await burstCheckLiveOnceForWindow(djId);
@@ -314,6 +318,7 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
       const liveIdRaw = live?.id?.toString?.() || "";
       const liveId = Number(liveIdRaw);
       if (!Number.isFinite(liveId)) {
+        // 取得値が壊れている場合は join せずエラー扱いにする。
         await interaction.editReply("❌ liveId の取得に失敗しました。");
         return;
       }
@@ -364,6 +369,7 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.isButton()) {
     if (interaction.customId.startsWith("join_live_")) {
+      // check 結果の参加ボタンから直接 join する経路。
       const raw = interaction.customId.replace("join_live_", "");
       const liveId = Number(raw);
       if (!Number.isFinite(liveId)) {

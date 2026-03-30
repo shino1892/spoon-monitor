@@ -42,6 +42,7 @@ function toBool(value: string | undefined, fallback = false) {
 export function loadCollectorConfig(argv: string[], env: NodeJS.ProcessEnv): CollectorConfig {
   const [, , liveIdRaw, liveStartTime = "", liveTitle = "", folderName = ""] = argv;
   if (!liveIdRaw) {
+    // ライブ ID が無いと収集対象を特定できないため即終了する。
     console.error("collector 起動失敗: liveId が未指定です。usage: tsx src/spoon/collector.ts <liveId> <startIso> <title> <folderName>");
     process.exit(1);
   }
@@ -59,6 +60,7 @@ export function loadCollectorConfig(argv: string[], env: NodeJS.ProcessEnv): Col
   const dbPort = toPositiveInt(env.DB_PORT, 5432);
 
   const db =
+    // DB 設定が揃っているときだけ DB 保存を有効にする。
     dbHost && dbUser && dbPassword && dbName
       ? {
           host: dbHost,

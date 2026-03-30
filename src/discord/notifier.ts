@@ -15,6 +15,7 @@ function getBotToken() {
 }
 
 function getNotifyMode(): NotifyMode {
+  // 想定外の値が来た場合も channel 扱いにして通知不能を避ける。
   const mode = (getEnv("DISCORD_NOTIFY_MODE") || "channel").toLowerCase();
   return mode === "dm" ? "dm" : "channel";
 }
@@ -23,11 +24,13 @@ async function resolveTargetChannelId(): Promise<string> {
   const token = getBotToken();
   const mode = getNotifyMode();
   if (mode === "channel") {
+    // 通常運用はチャンネル送信を優先する。
     const channelId = getEnv("DISCORD_CHANNEL_ID");
     if (!channelId) throw new Error("DISCORD_CHANNEL_ID is missing");
     return channelId;
   }
 
+  // DM モード時は管理者 ID から DM チャンネルを解決する。
   const adminId = getEnv("DISCORD_ADMIN_ID") || getEnv("ADMIN_ID");
   if (!adminId) throw new Error("DISCORD_ADMIN_ID or ADMIN_ID is missing (dm mode)");
 

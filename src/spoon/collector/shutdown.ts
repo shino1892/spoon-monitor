@@ -47,6 +47,7 @@ export function createSaveAndExitHandler(params: CreateSaveAndExitHandlerParams)
   let hasError = false;
 
   return async () => {
+    // シグナル重複受信時の二重保存を防ぐ。
     if (isShuttingDown) return;
     isShuttingDown = true;
 
@@ -64,6 +65,7 @@ export function createSaveAndExitHandler(params: CreateSaveAndExitHandlerParams)
       saveSummaryJson(params.folderName, finalReport);
       log.info(`JSON保存完了: ${params.folderName}/summary.json`);
 
+      // DB 接続済みの場合のみ永続化し、保存結果を Discord 通知する。
       if (params.isDbConnected()) {
         const saved = await finishStream(params.db, summaryForDb);
         if (saved?.reportId) {

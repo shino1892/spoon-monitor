@@ -52,6 +52,7 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
   const entryMessages: string[] = [];
   const entryAutoReplyMessages: string[] = [];
   let stats: UserActivity | undefined;
+  const isJoinEvent = event.eName === EventName.ROOM_JOIN;
 
   // Mailbox/Poll 系イベントは現在は観測のみ（将来ここに処理を追加する）
   if (NOOP_HANDLED_EVENT_NAMES.includes(event.eName as (typeof NOOP_HANDLED_EVENT_NAMES)[number])) {
@@ -59,10 +60,15 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
   }
 
   if (event.userId !== undefined && Number.isFinite(event.userId)) {
-    const entryResult = handleEntry(state, event.gen, nowISO);
-    if (entryResult?.joinMessage) entryMessages.push(entryResult.joinMessage);
-    if (entryResult?.reJoinMessage) entryMessages.push(entryResult.reJoinMessage);
-    if (entryResult?.entryAutoReplyMessage) entryAutoReplyMessages.push(entryResult.entryAutoReplyMessage);
+    // 在室状態の更新は、明示的な入室イベントと初回観測時に限定する。
+    const shouldHandleEntry = isJoinEvent || !state.userStats.has(event.userId);
+    if (shouldHandleEntry) {
+      const entryResult = handleEntry(state, event.gen, nowISO, { forceRejoin: isJoinEvent });
+      if (entryResult?.joinMessage) entryMessages.push(entryResult.joinMessage);
+      if (entryResult?.leaveMessage) entryMessages.push(entryResult.leaveMessage);
+      if (entryResult?.reJoinMessage) entryMessages.push(entryResult.reJoinMessage);
+      if (entryResult?.entryAutoReplyMessage) entryAutoReplyMessages.push(entryResult.entryAutoReplyMessage);
+    }
 
     stats = state.userStats.get(event.userId);
     if (stats) stats.lastSeen = nowISO;
@@ -79,6 +85,7 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
   }
 
   if (stats && isLikeEvent(event.eName)) {
+    // 無料/有料いいねでペイロード項目が異なるためイベント種別で分岐する。
     const likeCount = event.eName === EventName.LIVE_PAID_LIKE ? toPositiveInt(event.payload?.amount, 1) : toPositiveInt(event.payload?.count, 1);
     addLike(state, stats, likeCount);
     return {

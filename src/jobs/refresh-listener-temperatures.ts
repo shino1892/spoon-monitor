@@ -18,6 +18,7 @@ function getDbConfig(env: NodeJS.ProcessEnv) {
   const port = toPort(env.DB_PORT);
 
   if (!host || !user || !password || !database) {
+    // 必須値が一つでも欠ける場合は接続を試みない。
     return null;
   }
 
@@ -43,6 +44,7 @@ async function run() {
     log.error("refresh_all_listener_temperatures の実行に失敗しました", errorToMessage(error));
     process.exitCode = 1;
   } finally {
+    // 本処理の成否にかかわらず接続リークを避ける。
     try {
       await client.end();
     } catch {

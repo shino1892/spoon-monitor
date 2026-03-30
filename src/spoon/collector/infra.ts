@@ -121,6 +121,7 @@ export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(
 
 export async function loadKnownUserIds(db: Client | null, isDbConnected: boolean): Promise<Set<number>> {
   if (!db || !isDbConnected) {
+    // DB が使えないときは直近 summary.json 群から既知ユーザーを復元する。
     const ids = loadKnownUserIdsFromSummaryJson();
     log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件, latest ${30} folders)`);
     return ids;
@@ -153,6 +154,7 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
   let reportId: number | null = null;
   try {
     log.info("データを PostgreSQL に保存中...");
+    // レポート本体とリスナー明細を同一トランザクションで確定する。
     await db.query("BEGIN");
 
     const reportQuery = `
@@ -168,6 +170,7 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
 
     const listenerRows = Array.from(summary.userStats.entries());
     const batchSize = 200;
+    // プレースホルダ上限とクエリサイズを避けるため分割 INSERT する。
     for (let offset = 0; offset < listenerRows.length; offset += batchSize) {
       const chunk = listenerRows.slice(offset, offset + batchSize);
       const values: Array<number | string> = [];
@@ -198,6 +201,7 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
     return { reportId, listenerCount };
   } catch (err: any) {
     try {
+      // 部分保存を残さないため失敗時は必ずロールバックする。
       await db.query("ROLLBACK");
     } catch {}
     throw new Error(`終了処理エラー: ${err?.message || err}`);

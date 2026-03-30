@@ -49,6 +49,7 @@ function sanitizeForLog(input: unknown, seen = new WeakSet<object>()): unknown {
   for (const [k, v] of Object.entries(obj)) {
     const keyLower = k.toLowerCase();
     if (SENSITIVE_KEYS.has(keyLower)) {
+      // トークン等の機密値はログへそのまま出さない。
       out[k] = maskSecret(v);
       continue;
     }
@@ -84,6 +85,7 @@ function toPositiveInt(value: unknown, fallback = 1) {
 }
 
 async function setupClients() {
+  // 収集前に DJ クライアントと保存先（DB/JSON）を準備する。
   const djClient = await initSpoon("DJ");
   isDbConnected = await connectDb(db);
   const knownUserIds = await loadKnownUserIds(db, isDbConnected);
@@ -104,6 +106,7 @@ async function startCollector() {
 
   const pollListeners = async () => {
     try {
+      // 定期スナップショットから入退室を検知する。
       const data = await client.api.live.getListeners(liveId);
       const latestListeners = data.results || [];
       const nowISO = new Date().toISOString();
@@ -182,6 +185,7 @@ async function startCollector() {
     }
 
     if (DEBUG_SPOON_EVENTS && isUnknownEvent) {
+      // 未知イベントは後追い解析できるよう jsonl に保存する。
       void saveUnknownEventPayload(folderName, event.eName, event.payload).catch((e: any) => {
         log.error("未知イベント payload 保存失敗", errorToMessage(e));
       });
@@ -251,6 +255,7 @@ async function startCollector() {
       );
     }
   } catch (err) {
+    // join に失敗した時点で継続不能なので終了する。
     log.error("入室失敗", errorToMessage(err));
     process.exit(1);
   }
