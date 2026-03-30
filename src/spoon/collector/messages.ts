@@ -31,8 +31,8 @@ export function buildDonationMetricLogMessage(amount: number) {
 }
 
 export function buildLikeAutoReply(nickname: string, likeCount: number) {
-  const namePrefix = `${nickname}さん\n`;
-  if (likeCount === 1) return `${namePrefix}ハートありがとう！`;
+  const namePrefix = `${nickname}\n`;
+  if (likeCount === 1) return `ハートありがとう。${namePrefix}のこと解析してもいい？`; //ひなが考えたやつ
   if (likeCount < 10) return `${namePrefix}ミニバスターありがとう！`;
   return `${namePrefix}バスターありがとう！`;
 }
