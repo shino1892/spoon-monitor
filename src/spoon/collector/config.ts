@@ -41,10 +41,16 @@ function toBool(value: string | undefined, fallback = false) {
 
 export function loadCollectorConfig(argv: string[], env: NodeJS.ProcessEnv): CollectorConfig {
   const [, , liveIdRaw, liveStartTime = "", liveTitle = "", folderName = ""] = argv;
-  if (!liveIdRaw) process.exit(1);
+  if (!liveIdRaw) {
+    console.error("collector 起動失敗: liveId が未指定です。usage: tsx src/spoon/collector.ts <liveId> <startIso> <title> <folderName>");
+    process.exit(1);
+  }
 
   const liveId = Number(liveIdRaw);
-  if (!Number.isFinite(liveId)) process.exit(1);
+  if (!Number.isFinite(liveId)) {
+    console.error(`collector 起動失敗: liveId が数値ではありません (${liveIdRaw})`);
+    process.exit(1);
+  }
 
   const dbHost = env.DB_HOST;
   const dbUser = env.DB_USER;

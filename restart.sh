@@ -12,4 +12,4 @@ pm2 save
 
 # 3. ログの確認
 # 起動が成功したか確認するためにログを表示します（Ctrl+Cで抜けられます）
-pm2 logs spoon-app
+pm2 logs spoon-manager
