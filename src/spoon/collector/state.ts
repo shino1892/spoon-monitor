@@ -16,6 +16,7 @@ export interface CollectorState {
   userStats: Map<number, UserActivity>;
   currentListeners: Set<number>;
   allTimeSeenUserIds: Set<number>;
+  lastVisitByUserId: Map<number, string>;
   totalLikes: number;
 }
 
@@ -40,11 +41,12 @@ function resolveUserId(user: RawUser): number | null {
   return n;
 }
 
-export function createCollectorState(allTimeSeenUserIds: Iterable<number> = []): CollectorState {
+export function createCollectorState(allTimeSeenUserIds: Iterable<number> = [], lastVisitByUserId: Map<number, string> = new Map<number, string>()): CollectorState {
   return {
     userStats: new Map<number, UserActivity>(),
     currentListeners: new Set<number>(),
     allTimeSeenUserIds: new Set<number>(allTimeSeenUserIds),
+    lastVisitByUserId,
     totalLikes: 0,
   };
 }
@@ -56,6 +58,7 @@ export function handleEntry(state: CollectorState, user: RawUser, nowISO: string
   if (!state.userStats.has(userId)) {
     // この配信中で初登場のユーザーを初期化する。
     const hasVisitedAnyLiveBefore = state.allTimeSeenUserIds.has(userId);
+    const previousVisitAt = hasVisitedAnyLiveBefore ? state.lastVisitByUserId.get(userId) : undefined;
     const stats: UserActivity = {
       userId,
       nickname: user.nickname || "リスナー",
@@ -75,7 +78,7 @@ export function handleEntry(state: CollectorState, user: RawUser, nowISO: string
     return {
       userId,
       stats,
-      joinMessage: buildJoinLogMessage(stats.nickname),
+      joinMessage: buildJoinLogMessage(stats.nickname, previousVisitAt),
       entryAutoReplyMessage: buildEntryAutoReply(stats.nickname, category),
     };
   }

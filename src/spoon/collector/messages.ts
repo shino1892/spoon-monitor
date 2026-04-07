@@ -1,13 +1,29 @@
 export type EntryCategory = "first-ever" | "first-in-live" | "second-entry";
 
+function formatVisitTimeForMessage(iso: string) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toLocaleString("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function buildEntryAutoReply(nickname: string, category: EntryCategory) {
   if (category === "first-ever") return `はじめまして！${nickname}さん、いらっしゃい！`;
   if (category === "first-in-live") return `${nickname}さん、いらっしゃい！`;
   return `${nickname}さん、おかえりなさい！`;
 }
 
-export function buildJoinLogMessage(nickname: string) {
-  return `[Join] ${nickname} (初回入室)`;
+export function buildJoinLogMessage(nickname: string, previousVisitAt?: string) {
+  if (!previousVisitAt) {
+    return `[Join] ${nickname} (初回入室)`;
+  }
+  return `[Join] ${nickname} (初回入室 / 前回来訪: ${formatVisitTimeForMessage(previousVisitAt)})`;
 }
 
 export function buildReJoinLogMessage(nickname: string, entryCount: number) {

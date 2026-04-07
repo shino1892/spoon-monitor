@@ -7,7 +7,7 @@ import { initSpoon } from "../app";
 import { loadCollectorConfig } from "./collector/config";
 import { applyPollingSnapshot, createCollectorState } from "./collector/state";
 import { applyEventToState, createLikeAutoReply, isLikeEvent, NOOP_HANDLED_EVENT_NAMES, parseCollectorEvent, ROOM_CLOSE_EVENT_NAME } from "./collector/events";
-import { connectDb, createDbClient, loadKnownUserIds, sendDiscordMessage } from "./collector/infra";
+import { connectDb, createDbClient, loadKnownUserHistory, sendDiscordMessage } from "./collector/infra";
 import { createSaveAndExitHandler } from "./collector/shutdown";
 import { createLogger, errorToMessage } from "../shared/logger";
 
@@ -88,9 +88,9 @@ async function setupClients() {
   // 収集前に DJ クライアントと保存先（DB/JSON）を準備する。
   const djClient = await initSpoon("DJ");
   isDbConnected = await connectDb(db);
-  const knownUserIds = await loadKnownUserIds(db, isDbConnected);
+  const knownUserHistory = await loadKnownUserHistory(db, isDbConnected);
 
-  return { djClient, knownUserIds };
+  return { djClient, knownUserHistory };
 }
 
 async function startCollector() {
@@ -98,10 +98,10 @@ async function startCollector() {
   log.info(startupLog);
   await sendDiscordMessage(DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, startupLog);
 
-  const { djClient: client, knownUserIds } = await setupClients();
+  const { djClient: client, knownUserHistory } = await setupClients();
 
   const live = client.live;
-  const state = createCollectorState(knownUserIds);
+  const state = createCollectorState(knownUserHistory.seenUserIds, knownUserHistory.lastVisitByUserId);
   let pollInterval: NodeJS.Timeout | undefined;
 
   const pollListeners = async () => {

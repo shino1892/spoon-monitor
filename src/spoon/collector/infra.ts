@@ -17,6 +17,11 @@ export interface StreamSummary {
   userStats: Map<number, UserActivity>;
 }
 
+export interface KnownUserHistory {
+  seenUserIds: Set<number>;
+  lastVisitByUserId: Map<number, string>;
+}
+
 export function createDbClient(dbConfig: DbConfig | null) {
   if (!dbConfig) {
     log.warn("DB環境変数が不足しているため、DB保存を無効化します。(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME)");
@@ -69,19 +74,38 @@ function toFiniteUserId(value: unknown): number | null {
   return n;
 }
 
-export async function loadKnownUserIdsFromDb(db: Client): Promise<Set<number>> {
-  const res = await db.query("SELECT DISTINCT user_id FROM listener_activities");
-  const ids = new Set<number>();
-  for (const row of res.rows) {
-    const id = toFiniteUserId(row.user_id);
-    if (id !== null) ids.add(id);
-  }
-  return ids;
+function toIsoStringOrNull(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t).toISOString();
 }
 
-export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(), "data"), maxFolders = 30): Set<number> {
+function setLatestVisit(map: Map<number, string>, userId: number, candidateIso: string | null) {
+  if (!candidateIso) return;
+  const prevIso = map.get(userId);
+  if (!prevIso || Date.parse(candidateIso) > Date.parse(prevIso)) {
+    map.set(userId, candidateIso);
+  }
+}
+
+export async function loadKnownUserHistoryFromDb(db: Client): Promise<KnownUserHistory> {
+  const res = await db.query("SELECT user_id, MAX(last_seen) AS last_seen FROM listener_activities GROUP BY user_id");
   const ids = new Set<number>();
-  if (!fs.existsSync(dataDir)) return ids;
+  const lastVisitByUserId = new Map<number, string>();
+  for (const row of res.rows) {
+    const id = toFiniteUserId(row.user_id);
+    if (id === null) continue;
+    ids.add(id);
+    setLatestVisit(lastVisitByUserId, id, toIsoStringOrNull(row.last_seen));
+  }
+  return { seenUserIds: ids, lastVisitByUserId };
+}
+
+export function loadKnownUserHistoryFromSummaryJson(dataDir = path.join(process.cwd(), "data"), maxFolders = 30): KnownUserHistory {
+  const ids = new Set<number>();
+  const lastVisitByUserId = new Map<number, string>();
+  if (!fs.existsSync(dataDir)) return { seenUserIds: ids, lastVisitByUserId };
 
   const folders = fs
     .readdirSync(dataDir, { withFileTypes: true })
@@ -107,36 +131,64 @@ export function loadKnownUserIdsFromSummaryJson(dataDir = path.join(process.cwd(
       const users = raw?.users;
       if (!users || typeof users !== "object") continue;
 
-      for (const key of Object.keys(users as Record<string, unknown>)) {
+      for (const [key, value] of Object.entries(users as Record<string, unknown>)) {
         const id = toFiniteUserId(key);
-        if (id !== null) ids.add(id);
+        if (id === null) continue;
+
+        ids.add(id);
+        const user = value as { lastSeen?: unknown };
+        setLatestVisit(lastVisitByUserId, id, toIsoStringOrNull(user.lastSeen));
       }
     } catch (e: any) {
       log.warn(`summary.json 読み込み失敗: ${p} (${errorToMessage(e)})`);
     }
   }
 
-  return ids;
+  return { seenUserIds: ids, lastVisitByUserId };
 }
 
-export async function loadKnownUserIds(db: Client | null, isDbConnected: boolean): Promise<Set<number>> {
+function mergeKnownUserHistoryPreferPrimary(primary: KnownUserHistory, secondary: KnownUserHistory): KnownUserHistory {
+  const seenUserIds = new Set<number>(primary.seenUserIds);
+  for (const id of secondary.seenUserIds) {
+    seenUserIds.add(id);
+  }
+
+  // primary(DB) を優先し、欠けている値のみ secondary(JSON) で補完する。
+  const lastVisitByUserId = new Map<number, string>(primary.lastVisitByUserId);
+  for (const [id, iso] of secondary.lastVisitByUserId) {
+    if (!lastVisitByUserId.has(id)) {
+      lastVisitByUserId.set(id, iso);
+    }
+  }
+
+  return { seenUserIds, lastVisitByUserId };
+}
+
+export async function loadKnownUserHistory(db: Client | null, isDbConnected: boolean): Promise<KnownUserHistory> {
   if (!db || !isDbConnected) {
     // DB が使えないときは直近 summary.json 群から既知ユーザーを復元する。
-    const ids = loadKnownUserIdsFromSummaryJson();
-    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件, latest ${30} folders)`);
-    return ids;
+    const history = loadKnownUserHistoryFromSummaryJson();
+    log.info(`既知ユーザー読込: JSONフォールバック (${history.seenUserIds.size}件, latest ${30} folders)`);
+    return history;
   }
 
   try {
-    const ids = await loadKnownUserIdsFromDb(db);
-    log.info(`既知ユーザー読込: DB (${ids.size}件)`);
-    return ids;
+    const dbHistory = await loadKnownUserHistoryFromDb(db);
+    const jsonHistory = loadKnownUserHistoryFromSummaryJson();
+    const history = mergeKnownUserHistoryPreferPrimary(dbHistory, jsonHistory);
+    log.info(`既知ユーザー読込: DB優先 (db=${dbHistory.seenUserIds.size}件, json補完=${Math.max(0, history.seenUserIds.size - dbHistory.seenUserIds.size)}件, total=${history.seenUserIds.size}件)`);
+    return history;
   } catch (e: any) {
     log.warn(`既知ユーザーのDB読込に失敗。JSONへフォールバック (${errorToMessage(e)})`);
-    const ids = loadKnownUserIdsFromSummaryJson();
-    log.info(`既知ユーザー読込: JSONフォールバック (${ids.size}件, latest ${30} folders)`);
-    return ids;
+    const history = loadKnownUserHistoryFromSummaryJson();
+    log.info(`既知ユーザー読込: JSONフォールバック (${history.seenUserIds.size}件, latest ${30} folders)`);
+    return history;
   }
+}
+
+export async function loadKnownUserIds(db: Client | null, isDbConnected: boolean): Promise<Set<number>> {
+  const history = await loadKnownUserHistory(db, isDbConnected);
+  return history.seenUserIds;
 }
 
 export function saveSummaryJson(folderName: string, finalReport: unknown) {
