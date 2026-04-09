@@ -28,6 +28,31 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getHttpStatus(err: any): number | undefined {
+  const direct = err?.status;
+  if (typeof direct === "number") return direct;
+  const responseStatus = err?.response?.status;
+  if (typeof responseStatus === "number") return responseStatus;
+  const nestedStatus = err?.response?.data?.status;
+  if (typeof nestedStatus === "number") return nestedStatus;
+  return undefined;
+}
+
+function isAuthLikeStatus(status: number | undefined) {
+  return status === 406 || status === 401 || status === 403;
+}
+
+async function resetMonitorClient() {
+  if (!monitorClient) return;
+  try {
+    // sopia-core 側が提供していればWSを明示切断（無ければ無視）。
+    (monitorClient as any)?.disconnectWebSocket?.();
+  } catch {
+    // ignore
+  }
+  monitorClient = null;
+}
+
 async function getDjClient() {
   if (!djClient) {
     djClient = await initSpoon("DJ");
@@ -138,11 +163,25 @@ async function stopCollectorProcess() {
 }
 
 async function burstCheckLiveOnceForWindow(djId: string) {
-  const monitorClient = await getMonitorClient();
+  let mc = await getMonitorClient();
   const deadline = Date.now() + CHECK_WINDOW_MS;
   while (Date.now() < deadline) {
     // 短い間隔で購読一覧を再取得し、配信開始直後も拾えるようにする。
-    const data = await monitorClient.api.live.getSubscribed({ page_size: 50, page: 1 });
+    let data: any;
+    try {
+      data = await mc.api.live.getSubscribed({ page_size: 50, page: 1 });
+    } catch (e: any) {
+      const status = getHttpStatus(e);
+      if (isAuthLikeStatus(status)) {
+        // トークン失効の可能性が高いので、拡張機能から更新されるのを待って再初期化して続行。
+        log.warn(`monitor token may be expired (status=${status}). Re-initializing monitor client...`);
+        await resetMonitorClient();
+        await sleep(1500);
+        mc = await getMonitorClient();
+        continue;
+      }
+      throw e;
+    }
     const liveList = data.results || [];
     const myLive = liveList.find((l: any) => l?.author?.id?.toString?.() === djId);
     if (myLive) return myLive;

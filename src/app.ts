@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { SpoonV2, Country, LogLevel } from "@sopia-bot/core";
+import { getDynamicTokenFor } from "./shared/token-store";
 
 // HTTP デバッグを明示的に有効化していない場合は冗長ログを抑止する。
 if (process.env.SOPIA_HTTP_DEBUG !== "1") {
@@ -12,8 +13,14 @@ export async function initSpoon(type: "DJ" | "MONITOR") {
   await client.init();
 
   // 実行モードごとに参照するトークン環境変数を切り替える。
-  const accessToken = type === "DJ" ? process.env.DJ_ACCESS_TOKEN || process.env.COLLECTOR_TOKEN : process.env.MONITOR_ACCESS_TOKEN || process.env.MONITOR_TOKEN;
-  const refreshToken = type === "DJ" ? process.env.DJ_REFRESH_TOKEN : process.env.MONITOR_REFRESH_TOKEN;
+  const envAccessToken = type === "DJ" ? process.env.DJ_ACCESS_TOKEN || process.env.COLLECTOR_TOKEN : process.env.MONITOR_ACCESS_TOKEN || process.env.MONITOR_TOKEN;
+  const envRefreshToken = type === "DJ" ? process.env.DJ_REFRESH_TOKEN : process.env.MONITOR_REFRESH_TOKEN;
+
+  // data/tokens.json があれば優先（Chrome拡張経由で更新可能）。
+  const dynamic = await getDynamicTokenFor(type);
+
+  const accessToken = dynamic.accessToken || envAccessToken;
+  const refreshToken = dynamic.refreshToken || envRefreshToken;
 
   if (!accessToken) throw new Error(`${type} token is missing.`);
 
