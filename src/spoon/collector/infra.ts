@@ -205,13 +205,21 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
 
   let reportId: number | null = null;
   try {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ▼ 修正後: finishStream関数内のDB保存ロジック
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
     log.info("データを PostgreSQL に保存中...");
-    // レポート本体とリスナー明細を同一トランザクションで確定する。
     await db.query("BEGIN");
 
+    // ① レポートのUPSERT（同じlive_idなら更新してidを取得）
     const reportQuery = `
       INSERT INTO live_reports (live_id, title, dj_name, duration, likes, created_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (live_id) 
+      DO UPDATE SET 
+        duration = EXCLUDED.duration,
+        likes = EXCLUDED.likes
       RETURNING id;
     `;
     const reportValues = [summary.id, summary.title, summary.djName, summary.durationMinutes, summary.likes];
@@ -222,7 +230,7 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
 
     const listenerRows = Array.from(summary.userStats.entries());
     const batchSize = 200;
-    // プレースホルダ上限とクエリサイズを避けるため分割 INSERT する。
+
     for (let offset = 0; offset < listenerRows.length; offset += batchSize) {
       const chunk = listenerRows.slice(offset, offset + batchSize);
       const values: Array<number | string> = [];
@@ -234,12 +242,22 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
         })
         .join(",\n");
 
+      // ② リスナー活動のUPSERT（(report_id, user_id)が同じなら数値を合算）
       const listenerQuery = `
         INSERT INTO listener_activities (
           report_id, user_id, nickname, stay_seconds, entry_count,
           chat_count, heart_count, spoon_count, first_seen, last_seen
         )
-        VALUES ${placeholders};
+        VALUES ${placeholders}
+        ON CONFLICT (report_id, user_id) -- 先ほど追加したユニーク制約を使用
+        DO UPDATE SET
+          nickname = EXCLUDED.nickname,
+          stay_seconds = listener_activities.stay_seconds + EXCLUDED.stay_seconds,
+          entry_count = listener_activities.entry_count + EXCLUDED.entry_count,
+          chat_count = listener_activities.chat_count + EXCLUDED.chat_count,
+          heart_count = listener_activities.heart_count + EXCLUDED.heart_count,
+          spoon_count = listener_activities.spoon_count + EXCLUDED.spoon_count,
+          last_seen = EXCLUDED.last_seen;
       `;
       await db.query(listenerQuery, values);
     }

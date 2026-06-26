@@ -226,6 +226,8 @@ async function startCollector() {
     // --- 3. 自動ハーコメ機能 ---
     // 自分自身のいいねを除外（上で isSelf return 済み）
     if (result.stats && result.likeCount !== undefined && isLikeEvent(event.eName)) {
+      //ここに無料ハートと有料ハートのNUM取得方法をかく
+      log.info(`ハーコメのとこ：likeCount: ${result.likeCount}`);
       const replyMessage = createLikeAutoReply(event.nickname, result.likeCount);
 
       if (DEBUG_SPOON_EVENTS) {

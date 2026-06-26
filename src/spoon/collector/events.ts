@@ -2,10 +2,13 @@ import { v2 } from "@sopia-bot/core";
 import { CollectorState, UserActivity, addChat, addDonation, addLike, handleEntry } from "./state";
 import { buildChatMetricLogMessage, buildDonationMetricLogMessage, buildLikeAutoReply, buildLikeMetricLogMessage } from "./messages";
 
+import { createLogger, errorToMessage } from "../../shared/logger";
+
 const { EventName } = v2;
 
 export const ROOM_CLOSE_EVENT_NAME = "RoomClose";
 export const NOOP_HANDLED_EVENT_NAMES = ["LivePlayMailboxStart", "LivePlayMailboxUpdate", "LivePlayMailbox", "LivePlayMailboxEnd", "LivePlayPollStart", "LivePlayPollUpdate", "LivePlayPollEnd"] as const;
+const log = createLogger("collector");
 
 export interface ParsedCollectorEvent {
   eName: string;
@@ -87,6 +90,7 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
   if (stats && isLikeEvent(event.eName)) {
     // 無料/有料いいねでペイロード項目が異なるためイベント種別で分岐する。
     const likeCount = event.eName === EventName.LIVE_PAID_LIKE ? toPositiveInt(event.payload?.amount, 1) : toPositiveInt(event.payload?.count, 1);
+    log.info(`インスタンスのとこ：likeCount: ${likeCount}`);
     addLike(state, stats, likeCount);
     return {
       stats,
