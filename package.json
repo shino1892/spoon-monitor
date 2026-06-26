@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "check": "tsc -p tsconfig.json --noEmit",
+    "token-server": "node token-server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -16,8 +17,10 @@
     "axios": "^1.13.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
+    "cors": "^2.8.5",
     "discord.js": "^14.25.1",
     "dotenv": "^17.2.4",
+    "express": "^4.21.2",
     "pg": "^8.18.0",
     "reflect-metadata": "^0.2.2"
   },
