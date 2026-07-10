@@ -18,6 +18,9 @@ export async function initSpoon(type: "DJ" | "MONITOR") {
 
   const dynamic = await getDynamicTokenFor(type);
 
+  // どちらのトークンを使用したかの判定フラグ
+  const isDynamic = !!dynamic.accessToken;
+
   const accessToken = dynamic.accessToken || envAccessToken;
   const refreshToken = dynamic.refreshToken || envRefreshToken;
 
@@ -25,7 +28,11 @@ export async function initSpoon(type: "DJ" | "MONITOR") {
 
   await client.setToken(accessToken, refreshToken);
   const me: any = (client as any).logonUser;
-  console.log(`👤 ${type} ログイン完了: ${me?.nickname} (${me?.id})`);
+
+  // 💡 ログ出力部分を修正：トークンのソース（[拡張機能] または [環境変数]）を明示する
+  const tokenSource = isDynamic ? "拡張機能 (tokens.json)" : "環境変数 (.env)";
+  console.log(`👤 ${type} ログイン完了 [ソース: ${tokenSource}]: ${me?.nickname} (${me?.id})`);
+
   return client;
 }
 
