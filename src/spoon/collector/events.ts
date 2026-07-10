@@ -7,7 +7,7 @@ import { createLogger, errorToMessage } from "../../shared/logger";
 const { EventName } = v2;
 
 export const ROOM_CLOSE_EVENT_NAME = "RoomClose";
-export const NOOP_HANDLED_EVENT_NAMES = ["LivePlayMailboxStart", "LivePlayMailboxUpdate", "LivePlayMailbox", "LivePlayMailboxEnd", "LivePlayPollStart", "LivePlayPollUpdate", "LivePlayPollEnd"] as const;
+export const NOOP_HANDLED_EVENT_NAMES = ["LivePlayMailboxStart", "LivePlayMailboxUpdate", "LivePlayMailbox", "LivePlayMailboxEnd", "LivePlayPollStart", "LivePlayPollUpdate", "LivePlayPollEnd", "LiveFavoriteTemperature"] as const;
 const log = createLogger("collector");
 
 export interface ParsedCollectorEvent {

@@ -77,6 +77,36 @@ async function saveUnknownEventPayload(folderName: string, eventName: string, pa
   await fs.promises.appendFile(filePath, `${line}\n`, "utf8");
 }
 
+export async function saveAllEventPayload(
+  folderName: string, 
+  eventName: string, 
+  payload: any, 
+  raw: any
+): Promise<void> {
+  // 1. 既存のルールに従って、data/folderName への絶対パスを解決
+  const dataDir = path.join(process.cwd(), "data", folderName);
+  
+  // 2. ディレクトリが存在しない場合は自動生成（安全弁）
+  await fs.promises.mkdir(dataDir, { recursive: true });
+
+  const logFilePath = path.join(dataDir, "all-events.jsonl");
+  
+  // 3. 構造化して 1行の JSON 文字列に変換
+  // ※もし raw や payload にも秘匿情報が含まれる可能性がある場合は、
+  // 必要に応じて sanitizeForLog(payload) を適用してください
+  const logEntry = {
+    detectedAt: new Date().toISOString(),
+    eventName,
+    payload: payload || null,
+    raw: raw || null,
+  };
+
+  const line = JSON.stringify(logEntry);
+
+  // 4. プロジェクトの fs.promises 形式で非同期追記
+  await fs.promises.appendFile(logFilePath, `${line}\n`, "utf8");
+}
+
 function toPositiveInt(value: unknown, fallback = 1) {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -175,6 +205,10 @@ async function startCollector() {
     const nowISO = new Date().toISOString();
     const event = parseCollectorEvent(eventName, payload, raw, DJ_ID);
     const isUnknownEvent = !knownEventNames.has(event.eName);
+
+    void saveAllEventPayload(folderName, event.eName, event.payload, event.raw).catch((e: any) => {
+        log.error("全イベントデータ保存失敗", errorToMessage(e));
+    });
 
     if (DEBUG_SPOON_EVENTS) {
       log.debug(`[event] ${event.eName} userId=${event.userId ?? "(none)"} nick=${event.nickname} self=${event.isSelf}`);

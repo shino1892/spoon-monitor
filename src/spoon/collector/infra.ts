@@ -205,9 +205,6 @@ export async function finishStream(db: Client | null, summary: StreamSummary) {
 
   let reportId: number | null = null;
   try {
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ▼ 修正後: finishStream関数内のDB保存ロジック
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     log.info("データを PostgreSQL に保存中...");
     await db.query("BEGIN");
