@@ -21,5 +21,17 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    // 🆕 追加: トークンレシーバーサーバー
+    {
+      name: "token-receiver",
+      script: "pnpm",
+      args: "tsx src/server.ts", // レシーバーサーバーのファイルパス（環境に合わせて調整してください）
+      autorestart: true,         // サーバーなので落ちたら自動再起動する
+      watch: false,
+      env: {
+        NODE_ENV: "production",
+        PORT: 5000,
+      },
+    },
   ],
 };
