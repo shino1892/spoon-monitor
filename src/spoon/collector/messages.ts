@@ -47,10 +47,10 @@ export function buildDonationMetricLogMessage(amount: number) {
 }
 
 export function buildLikeAutoReply(nickname: string, likeCount: number) {
-  const namePrefix = `${nickname}\n`;
+  const namePrefix = `${nickname}`;
   // 1 回目だけ特別な文面にして反応率を上げる。
-  if (likeCount === 1) return `ハートありがとう。${namePrefix}のこと解析してもいい？`; //ひなが考えたやつ
+  if (likeCount === 1) return `${namePrefix}ハートありがとう！\nそのハート解析するね\`⎚⩊⎚´ -✧`; //ひなが考えたやつ
   // 連打時は閾値で短文テンプレートを切り替える。
-  if (likeCount < 10) return `${namePrefix}ミニバスターありがとう！`;
+  if (likeCount < 10) return `${namePrefix}ミニバスありがとう！`;
   return `${namePrefix}バスターありがとう！`;
 }

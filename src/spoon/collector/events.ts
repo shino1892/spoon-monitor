@@ -90,7 +90,6 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
   if (stats && isLikeEvent(event.eName)) {
     // 無料/有料いいねでペイロード項目が異なるためイベント種別で分岐する。
     const likeCount = event.eName === EventName.LIVE_PAID_LIKE ? toPositiveInt(event.payload?.amount, 1) : toPositiveInt(event.payload?.count, 1);
-    log.info(`インスタンスのとこ：likeCount: ${likeCount}`);
     addLike(state, stats, likeCount);
     return {
       stats,
