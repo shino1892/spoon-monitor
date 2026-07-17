@@ -9,8 +9,15 @@ import { createLogger, errorToMessage } from "../shared/logger";
 const log = createLogger("discord-bot");
 log.info("Starting Discord bot...");
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ 
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ] 
+});
 const ADMIN_ID = process.env.ADMIN_ID;
+const CHAT_CHANNEL_ID = process.env.CHAT_CHANNEL_ID;
 
 const CHECK_WINDOW_MS = 30_000;
 const CHECK_INTERVAL_MS = 2_000;
@@ -392,6 +399,26 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
 
   await interaction.reply({ content: "⚠️ 未対応のコマンドです。", ephemeral: true });
 }
+
+// === 追加: DiscordメッセージをSpoon配信チャットへ転送する機能 ===
+client.on("messageCreate", async (message) => {
+  // Bot自身の発言、またはチャンネルIDが未設定・不一致の場合は無視
+  if (message.author.bot || !CHAT_CHANNEL_ID || message.channelId !== CHAT_CHANNEL_ID) return;
+
+  // djClientが存在し、かつ現在collectorが動いている（＝どこかの配信に参加中）か確認
+  if (djClient && djClient.live && collectorLiveId !== null) {
+    try {
+      await djClient.live.message(message.content);
+      await message.react("✅");
+    } catch (e: any) {
+      log.error("❌ Spoonへのチャット送信失敗:", errorToMessage(e));
+      await message.react("❌");
+    }
+  } else {
+    // 参加していない場合、リアクションで通知
+    await message.react("⚠️");
+  }
+});
 
 client.on("interactionCreate", async (interaction) => {
   if (!isAdmin(interaction.user?.id)) {
