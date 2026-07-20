@@ -264,7 +264,7 @@ async function registerCommands() {
 
   const guildId = process.env.DISCORD_GUILD_ID;
 
-  const commands = [new SlashCommandBuilder().setName("lastsummary").setDescription("最新の summary.json の概要を表示"), new SlashCommandBuilder().setName("check").setDescription("配信状況を最大30秒だけチェック（2秒間隔）"), new SlashCommandBuilder().setName("join").setDescription("検知中のライブに参加"), new SlashCommandBuilder().setName("leave").setDescription("配信から退室")].map((c) => c.toJSON());
+  const commands = [new SlashCommandBuilder().setName("lastsummary").setDescription("最新の summary.json の概要を表示"), new SlashCommandBuilder().setName("check").setDescription("配信状況を最大30秒だけチェック（2秒間隔）"), new SlashCommandBuilder().setName("join").setDescription("検知中のライブに参加"), new SlashCommandBuilder().setName("leave").setDescription("配信から退室"),new SlashCommandBuilder().setName("checktoken").setDescription("Spoon APIのトークン状態を確認")].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(token);
   if (guildId) {
@@ -273,6 +273,32 @@ async function registerCommands() {
   } else {
     await rest.put(Routes.applicationCommands(appId), { body: commands });
     log.info("Slash commands registered (global)");
+  }
+}
+
+/**
+ * DJ の Spoon トークンが有効かテストする関数
+ */
+async function testDjSpoonToken() {
+  try {
+    const spoonClient = await initSpoon("DJ");
+    const me = (spoonClient as any).logonUser;
+
+    if (me?.id) {
+      // ✅ 最新の認証済みクライアントでキャッシュを更新
+      djClient = spoonClient;
+
+      const nickname = me.nickname || "(名前不明)";
+      return { ok: true, detail: `${nickname} (ID: ${me.id})` };
+    }
+    return { ok: false, detail: "ログインレスポンスからユーザー情報を取得できませんでした。" };
+  } catch (e: any) {
+    const status = getHttpStatus(e);
+    if (isAuthLikeStatus(status)) {
+      djClient = null;
+      return { ok: false, detail: `認証期限切れ / 無効 (HTTP ${status})` };
+    }
+    return { ok: false, detail: `失敗: ${e?.message || e}` };
   }
 }
 
@@ -393,6 +419,22 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
       await interaction.editReply({ content: "👋 退室しました。", components: [] });
     } catch (e: any) {
       await interaction.editReply(`❌ 退室失敗: ${e?.message || e}`);
+    }
+    return;
+  }
+
+  if (name === "checktoken") {
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const djResult = await testDjSpoonToken();
+      const djText = djResult.ok ? `✅ 有効: ${djResult.detail}` : `❌ 無効: ${djResult.detail}`;
+
+      await interaction.editReply(
+        `🔑 **Spoon トークン状態確認**\n` +
+        `- **DJ**: ${djText}`
+      );
+    } catch (e: any) {
+      await interaction.editReply(`❌ チェック処理中にエラーが発生しました: ${e?.message || e}`);
     }
     return;
   }
