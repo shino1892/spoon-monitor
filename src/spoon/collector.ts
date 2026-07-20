@@ -16,6 +16,8 @@ const log = createLogger("collector");
 const collectorConfig = loadCollectorConfig(process.argv, process.env);
 const { liveId, liveStartTime, liveTitle, folderName, pollIntervalMs: POLL_INTERVAL_MS, debugSpoonEvents: DEBUG_SPOON_EVENTS, debugSpoonPayload: DEBUG_SPOON_PAYLOAD, debugSpoonUnknownEvents: DEBUG_SPOON_UNKNOWN_EVENTS, debugSpoonMaxChars: DEBUG_SPOON_MAX_CHARS, debugLiveMethods: DEBUG_LIVE_METHODS, djId: DJ_ID, discordBotToken: DISCORD_BOT_TOKEN, discordChannelId: DISCORD_CHANNEL_ID, db: DB_CONFIG } = collectorConfig;
 
+const IGNORED_EVENTS = ["LiveMetaUpdate", "LiveRank"];
+
 const db = createDbClient(DB_CONFIG);
 let isDbConnected = false;
 
@@ -201,9 +203,11 @@ async function startCollector() {
     const event = parseCollectorEvent(eventName, payload, raw, DJ_ID);
     const isUnknownEvent = !knownEventNames.has(event.eName);
 
-    void saveAllEventPayload(folderName, event.eName, event.payload, event.raw).catch((e: any) => {
-      log.error("全イベントデータ保存失敗", errorToMessage(e));
-    });
+    if (!IGNORED_EVENTS.includes(event.eName)) {
+      void saveAllEventPayload(folderName, event.eName, event.payload, event.raw).catch((e: any) => {
+        log.error("全イベントデータ保存失敗", errorToMessage(e));
+      });
+    }
 
     if (DEBUG_SPOON_EVENTS) {
       log.debug(`[event] ${event.eName} userId=${event.userId ?? "(none)"} nick=${event.nickname} self=${event.isSelf}`);
