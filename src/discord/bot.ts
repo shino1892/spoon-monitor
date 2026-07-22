@@ -9,12 +9,8 @@ import { createLogger, errorToMessage } from "../shared/logger";
 const log = createLogger("discord-bot");
 log.info("Starting Discord bot...");
 
-const client = new Client({ 
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ] 
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 const ADMIN_ID = process.env.ADMIN_ID;
 const CHAT_CHANNEL_ID = process.env.CHAT_CHANNEL_ID;
@@ -264,7 +260,7 @@ async function registerCommands() {
 
   const guildId = process.env.DISCORD_GUILD_ID;
 
-  const commands = [new SlashCommandBuilder().setName("lastsummary").setDescription("最新の summary.json の概要を表示"), new SlashCommandBuilder().setName("check").setDescription("配信状況を最大30秒だけチェック（2秒間隔）"), new SlashCommandBuilder().setName("join").setDescription("検知中のライブに参加"), new SlashCommandBuilder().setName("leave").setDescription("配信から退室"),new SlashCommandBuilder().setName("checktoken").setDescription("Spoon APIのトークン状態を確認")].map((c) => c.toJSON());
+  const commands = [new SlashCommandBuilder().setName("lastsummary").setDescription("最新の summary.json の概要を表示"), new SlashCommandBuilder().setName("check").setDescription("配信状況を最大30秒だけチェック（2秒間隔）"), new SlashCommandBuilder().setName("join").setDescription("検知中のライブに参加"), new SlashCommandBuilder().setName("leave").setDescription("配信から退室"), new SlashCommandBuilder().setName("checktoken").setDescription("Spoon APIのトークン状態を確認")].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(token);
   if (guildId) {
@@ -288,7 +284,8 @@ async function testDjSpoonToken() {
       // ✅ 最新の認証済みクライアントでキャッシュを更新
       djClient = spoonClient;
 
-      const nickname = me.nickname || "(名前不明)";
+      const nickname = me.nickname || "不明";
+      if (nickname === "不明") return { ok: false, deatail: `認証期限切れ / 無効` };
       return { ok: true, detail: `${nickname} (ID: ${me.id})` };
     }
     return { ok: false, detail: "ログインレスポンスからユーザー情報を取得できませんでした。" };
@@ -429,10 +426,7 @@ async function handleInteraction(interaction: ChatInputCommandInteraction) {
       const djResult = await testDjSpoonToken();
       const djText = djResult.ok ? `✅ 有効: ${djResult.detail}` : `❌ 無効: ${djResult.detail}`;
 
-      await interaction.editReply(
-        `🔑 **Spoon トークン状態確認**\n` +
-        `- **DJ**: ${djText}`
-      );
+      await interaction.editReply(`🔑 **Spoon トークン状態確認**\n` + `- **DJ**: ${djText}`);
     } catch (e: any) {
       await interaction.editReply(`❌ チェック処理中にエラーが発生しました: ${e?.message || e}`);
     }
