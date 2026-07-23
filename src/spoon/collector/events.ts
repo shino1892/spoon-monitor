@@ -51,6 +51,16 @@ export function isLikeEvent(eName: string) {
   return eName === EventName.LIVE_FREE_LIKE || eName === EventName.LIVE_PAID_LIKE;
 }
 
+function isLikeItemUseEvent(event: ParsedCollectorEvent) {
+  if (event.eName !== EventName.LIVE_ITEM_USE) return false;
+  const effectType = event.payload?.effectType;
+  return typeof effectType === "string" && effectType.toUpperCase() === "LIKE";
+}
+
+function isCountableLikeEvent(event: ParsedCollectorEvent) {
+  return isLikeEvent(event.eName) || isLikeItemUseEvent(event);
+}
+
 export function applyEventToState(state: CollectorState, event: ParsedCollectorEvent, nowISO: string, toPositiveInt: (value: unknown, fallback?: number) => number): ApplyEventResult {
   const entryMessages: string[] = [];
   const entryAutoReplyMessages: string[] = [];
@@ -87,9 +97,9 @@ export function applyEventToState(state: CollectorState, event: ParsedCollectorE
     };
   }
 
-  if (stats && isLikeEvent(event.eName)) {
-    // 無料/有料いいねでペイロード項目が異なるためイベント種別で分岐する。
-    const likeCount = event.eName === EventName.LIVE_PAID_LIKE ? toPositiveInt(event.payload?.amount, 1) : toPositiveInt(event.payload?.count, 1);
+  if (stats && isCountableLikeEvent(event)) {
+    // イベント種別ごとにカウント項目を切り替える。
+    const likeCount = event.eName === EventName.LIVE_PAID_LIKE || isLikeItemUseEvent(event) ? toPositiveInt(event.payload?.amount, 1) : toPositiveInt(event.payload?.count, 1);
     addLike(state, stats, likeCount);
     return {
       stats,

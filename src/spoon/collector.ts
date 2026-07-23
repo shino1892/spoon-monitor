@@ -6,7 +6,7 @@ import { v2 } from "@sopia-bot/core";
 import { initSpoon } from "../app";
 import { loadCollectorConfig } from "./collector/config";
 import { applyPollingSnapshot, createCollectorState } from "./collector/state";
-import { applyEventToState, createLikeAutoReply, isLikeEvent, NOOP_HANDLED_EVENT_NAMES, parseCollectorEvent, ROOM_CLOSE_EVENT_NAME } from "./collector/events";
+import { applyEventToState, createLikeAutoReply, NOOP_HANDLED_EVENT_NAMES, parseCollectorEvent, ROOM_CLOSE_EVENT_NAME } from "./collector/events";
 import { connectDb, createDbClient, loadKnownUserHistory, sendDiscordMessage } from "./collector/infra";
 import { createSaveAndExitHandler } from "./collector/shutdown";
 import { createLogger, errorToMessage } from "../shared/logger";
@@ -258,7 +258,7 @@ async function startCollector() {
 
     // --- 3. 自動ハーコメ機能 ---
     // 自分自身のいいねを除外（上で isSelf return 済み）
-    if (result.stats && result.likeCount !== undefined && isLikeEvent(event.eName)) {
+    if (result.stats && result.likeCount !== undefined) {
       //ここに無料ハートと有料ハートのNUM取得方法をかく
       const replyMessage = createLikeAutoReply(event.nickname, result.likeCount);
 
