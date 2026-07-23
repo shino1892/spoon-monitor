@@ -29,3 +29,4 @@ Thumbs.db
 
 # Local generated data (remove this line if you want to commit data/)
 data/
+json/
